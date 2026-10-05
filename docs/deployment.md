@@ -12,7 +12,7 @@ and a role allowed to create Application Services. No Docker build is needed.
    match. Runtime provides `SNOWFLAKE_ACCOUNT`, `SNOWFLAKE_HOST` and token mount.
 4. From this project, run `snow app deploy` using the chosen service-owner role.
 5. Find the URL with `SHOW APPLICATION SERVICES` or `DESCRIBE APPLICATION SERVICE
-   SNOWFLAKE_APPS.APP.SNOWLENS`. Grant service access using the current App Runtime
+SNOWFLAKE_APPS.APP.SNOWLENS`. Grant service access using the current App Runtime
    access-control instructions.
 6. Validate using TWO users with different roles: a denied source must not become
    readable; row-access/masking results must match direct caller SELECT; saved
@@ -35,7 +35,7 @@ a separately accessible raw relation. These limits are visible in the UI/docs.
 
 Official references (checked 2026-10-05):
 
-* [App Runtime manifest](https://docs.snowflake.com/en/developer-guide/snowflake-app-runtime/app-yml)
-* [Query Snowflake and caller rights](https://docs.snowflake.com/en/developer-guide/snowflake-app-runtime/query-snowflake)
-* [Caller token composition](https://docs.snowflake.com/en/developer-guide/snowpark-container-services/tutorials/advanced/tutorial-7-callers-rights)
-* [Semantic SQL](https://docs.snowflake.com/en/sql-reference/constructs/semantic_view)
+- [App Runtime manifest](https://docs.snowflake.com/en/developer-guide/snowflake-app-runtime/app-yml)
+- [Query Snowflake and caller rights](https://docs.snowflake.com/en/developer-guide/snowflake-app-runtime/query-snowflake)
+- [Caller token composition](https://docs.snowflake.com/en/developer-guide/snowpark-container-services/tutorials/advanced/tutorial-7-callers-rights)
+- [Semantic SQL](https://docs.snowflake.com/en/sql-reference/constructs/semantic_view)

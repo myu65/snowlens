@@ -1,7 +1,7 @@
 {
   "name": "snowlens",
   "version": "0.1.0",
-  "description": "",
+  "description": "Fast table-first Snowflake exploration without mandatory datasets",
   "scripts": {
     "dev": "next dev --hostname 127.0.0.1",
     "build": "next build",
@@ -39,6 +39,7 @@
     "@types/snowflake-sdk": "^1.6.24",
     "eslint": "^9.39.5",
     "eslint-config-next": "^16.3.8",
+    "prettier": "^3.9.9",
     "typescript": "^6.0.3",
     "vitest": "^5.0.3"
   }

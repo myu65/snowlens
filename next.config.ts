@@ -1,3 +1,6 @@
-import type { NextConfig } from 'next';
-const config: NextConfig = { output: 'standalone', serverExternalPackages: ['snowflake-sdk'], poweredByHeader: false };
+import type { NextConfig } from "next";
+const config: NextConfig = {
+  serverExternalPackages: ["snowflake-sdk"],
+  poweredByHeader: false,
+};
 export default config;

@@ -4,9 +4,9 @@ Snowflake Data → optional Dataset → Saved View. A Dashboard is not a domain 
 
 Next.js App Router serves a React/TypeScript UI and three server APIs:
 
-* `GET /api/catalog`: live caller-visible sources, or fields for one source.
-* `POST /api/query`: logical query only, optional dataset scope, bounded CSV.
-* `GET/POST /api/state`: Dataset, Saved View, Favorite and Recent definitions.
+- `GET /api/catalog`: live caller-visible sources, or fields for one source.
+- `POST /api/query`: logical query only, optional dataset scope, bounded CSV.
+- `GET/POST /api/state`: Dataset, Saved View, Favorite and Recent definitions.
 
 `QueryableSource` supports tables, views, dynamic tables and semantic views.
 Relation kinds may be extended without adding another database provider. Ordinary
@@ -30,11 +30,13 @@ fallback, server result cache, credential exposure or cross-user connection reus
 RBAC, masking and row-access policies remain enforced by Snowflake. Local live
 credentials are intentionally unsupported to avoid silently testing owner rights.
 
-App definitions are VARIANT payloads in APP.METADATA, with owner, kind, id and
-timestamp. A Snowflake row access policy isolates personal definitions while
-allowing published datasets. Dataset field publication is a UI scope, not a new
+App definitions are VARIANT payloads with owner, kind, id and timestamp.
+APP.METADATA holds personal Saved Views, Favorites and Recent Items behind a
+Snowflake row access policy. APP.DATASETS holds published definitions with separate
+GRANT SELECT for explorers and write grants for Dataset Owner roles.
+Dataset field publication is a UI scope, not a new
 security boundary: raw access is governed by Snowflake. Dataset updates verify
-the current owner; app users with direct metadata table write privileges can still
+the current owner; Dataset Owners with direct DATASETS table write privileges can still
 change shared definitions using SQL. Trusted Dataset Owners should control these
 grants. Metadata does not contain business query results or a catalog mirror.
 Mock metadata is serialized to a gitignored local JSON file; mock is single-user.

@@ -8,3 +8,4 @@ test-results/
 !.env.example
 *.tsbuildinfo
 .snowlens-mock.json
+.snowlens-e2e.json
