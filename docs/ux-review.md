@@ -29,6 +29,8 @@ Reviewed 2026-10-05 using the local production build, in-app browser and Playwri
 - Production startup uses ordinary Next.js output to match `npm start` in App Runtime.
 - Reset page scroll when opening a source or returning home so the result heading
   and conditions stay visible after browsing a long source list.
+- On desktop, keep the exploration workspace within the viewport with independent
+  scrolling for settings and results; on phones use a stacked page layout.
 
 ## Validation scope
 

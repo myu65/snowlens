@@ -400,8 +400,13 @@ summary > span {
 }
 .explore {
   padding: 24px 28px;
+  height: calc(100dvh - 66px);
+  display: flex;
+  flex-direction: column;
+  min-height: 0;
 }
 .explore-heading {
+  flex-shrink: 0;
   display: flex;
   justify-content: space-between;
   gap: 20px;
@@ -436,6 +441,7 @@ summary > span {
   white-space: nowrap;
 }
 .filterbar {
+  flex-shrink: 0;
   display: flex;
   align-items: center;
   flex-wrap: wrap;
@@ -493,6 +499,7 @@ summary > span {
   padding: 6px;
 }
 .recommendations {
+  flex-shrink: 0;
   display: flex;
   justify-content: space-between;
   align-items: center;
@@ -520,15 +527,19 @@ summary > span {
   font-size: 11px;
 }
 .workspace {
+  flex: 1;
+  min-height: 0;
   display: grid;
   grid-template-columns: 244px minmax(0, 1fr);
   gap: 16px;
-  align-items: start;
+  align-items: stretch;
 }
 .workspace.wide {
   grid-template-columns: minmax(0, 1fr);
 }
 .settings {
+  overflow: auto;
+  min-height: 0;
   background: white;
   border: 1px solid var(--line);
   border-radius: 9px;
@@ -626,6 +637,9 @@ summary > span {
   border-color: #b8d9cc;
 }
 .results {
+  display: flex;
+  flex-direction: column;
+  min-height: 0;
   background: white;
   border: 1px solid var(--line);
   border-radius: 9px;
@@ -633,6 +647,7 @@ summary > span {
   min-width: 0;
 }
 .result-toolbar {
+  flex-shrink: 0;
   display: flex;
   align-items: center;
   justify-content: space-between;
@@ -660,9 +675,8 @@ summary > span {
 }
 .grid-scroll {
   overflow: auto;
-  height: calc(100vh - 338px);
-  min-height: 300px;
-  max-height: 780px;
+  flex: 1;
+  min-height: 160px;
 }
 .grid-header {
   display: grid;
@@ -720,6 +734,7 @@ summary > span {
   font-variant-numeric: tabular-nums;
 }
 .result-footer {
+  flex-shrink: 0;
   display: flex;
   align-items: center;
   justify-content: space-between;
@@ -935,6 +950,8 @@ summary > span {
   }
   .explore {
     padding: 18px 12px;
+    height: auto;
+    display: block;
   }
   .explore-heading {
     flex-wrap: wrap;
@@ -963,6 +980,7 @@ summary > span {
   }
   .grid-scroll {
     height: 460px;
+    flex: none;
   }
 }
 @media (max-width: 580px) {
