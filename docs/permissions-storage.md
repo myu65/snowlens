@@ -8,6 +8,8 @@ Snowflakeの基本は、オブジェクトの権限をアクセス用のロー�
 
 同じ閲覧ロールを使う2人でも、個人定義と入力の所有者は別です。共通の保存表に本人の変更しないIDを記録し、行ポリシーで読み手を制限します。保存は本人のIDを確認する固定プロシージャを通します。元データのSELECT、個人保存、共有化はそれぞれ別の判断です。
 
+App Runtimeのcaller権限は、サインインした利用者の既定ロールで実行されます。導入時は利用者側の権限と、Runtime側のcaller grantの両方で操作を許可します。SnowLensはブラウザー指定のロールへ切り替えません。実際のロールや行の制限が変わっても、個人保存の所有者は本人のIDで判断します。[App Runtimeの実行権限](https://docs.snowflake.com/en/developer-guide/snowflake-app-runtime/access-control#execution-context)
+
 ユーザーへの直接grantであるUBACは、個人開発や共同作業を補う選択肢です。ただし、共通の保存表へのSELECT grantだけでは本人の行に限定できません。SnowLensでは共通ロールと行ポリシーを使います。Personal Databaseには通常のテーブルデータを保存できないため、個人入力は通常のデータベースに置きます。[UBACの位置付け](https://docs.snowflake.com/en/user-guide/security-access-control-considerations#comparing-and-contrasting-rbac-with-ubac)、[Personal Databaseの対象](https://docs.snowflake.com/en/user-guide/personal-databases)
 
 導入時は、1つのデータベース内の権限をdatabase roleにまとめ、職務のaccount roleへ割り当てる構成も使えます。処理所有者のロールは管理者の階層に含め、最上位をSYSADMINへつなぎます。利用者やRuntimeに保存処理の所有者ロールを継承させません。通常のオブジェクト作成にはSYSADMIN配下のロールを使い、ACCOUNTADMINをアプリの実行ロールにしません。[ロールの階層と管理](https://docs.snowflake.com/en/user-guide/security-access-control-considerations#managing-custom-roles)
@@ -35,7 +37,7 @@ Snowflakeの基本は、オブジェクトの権限をアクセス用のロー�
 
 ユーザー名は変更・再利用されるため、保存者IDとは分けます。ID管理者はIdP/SCIMの変更しないIDか、本人用に発行したUUIDを登録します。名前の変更では同じIDを引き継ぎます。削除・退職ではアクセスと対応を無効にし、名前を再利用する前に古い対応を止めます。新しい人には新しいIDを発行します。この連携は導入先のID管理手順に組み込む条件で、アプリがSCIMを自動同期する実装ではありません。[SCIMの識別子](https://docs.snowflake.com/en/user-guide/scim-user-api-reference)
 
-利用者が多い導入先では、IdPのグループをSCIMで共通ロールへ同期し、本人IDの登録・変更・無効化も同じ管理手順に含めます。SnowflakeのSCIMユーザーIDは変更しないGUIDですが、SHOW USERSやDESCRIBE USERには出ません。氏名やLOGIN_NAMEから本人IDを推測せず、管理側で確認した対応を登録します。現在のアプリにはSCIM連携の処理がないため、この管理手順を省くことはできません。[SCIMのユーザーとグループ](https://docs.snowflake.com/en/user-guide/scim-intro)
+利用者が多い導入先では、IdPのグループをSCIMで共通ロールへ同期し、本人IDの登録・変更・無効化も同じ管理手順に含めます。SnowflakeのSCIMユーザーIDは変更しないGUIDですが、SHOW USERSやDESCRIBE USERには出ません。[SCIMのユーザー識別子](https://docs.snowflake.com/en/user-guide/scim-user-api-reference)を管理側で確認して登録し、氏名やLOGIN_NAMEから本人IDを推測しません。現在のアプリにはSCIM連携の処理がないため、この管理手順を省くことはできません。[SCIMのユーザーとグループ](https://docs.snowflake.com/en/user-guide/scim-intro)
 
 利用者とRuntimeにPRINCIPALSの直接更新権限を渡しません。対応を読むSecure Functionの所有者は、対応表のSELECTだけを持ちます。名称の再利用と対応の無効化順序はIssue #5の検証に含めます。
 
