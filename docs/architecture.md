@@ -8,6 +8,8 @@ Next.js App Router serves a React/TypeScript UI and these server APIs:
   freshly resolved fields and optional metric compatibility for one source.
 - `POST /api/fact-detail`: owner-mapped physical detail under fresh caller rights.
 - `POST /api/query`: logical query only, optional Dataset scope, exact totals and bounded CSV.
+- `POST /api/export`: fresh scoped execution plus Excel report/data sheets or CSV;
+  bounded current page, validated personal labels, no browser-supplied rows.
 - `POST /api/join-preview`: caller-visible key counts without materializing a fanout join.
 - `GET /api/personal-table`: full input rows for a single owned ID.
 - `POST /api/semantic-draft`: selected model definitions as downloadable DDL, without execution.
@@ -77,8 +79,16 @@ dimensions or page offset. Subtotals use ROLLUP and GROUPING, so actual NULL key
 are distinguishable. They recompute AVG/distinct counts rather than summing page
 cells. Semantic metrics requiring dimensions show an explanation instead of a
 false grand total; native semantic subtotal support is deferred. Total and page
-queries share a caller connection but not a transaction snapshot. CSV contains
-the current page and marks subtotal rows; the sticky grand total is not exported.
+queries share a caller connection but not a transaction snapshot. Excel's report
+sheet carries conditions, hierarchy and the source-computed grand total. Its native
+data table contains normal page rows only. CSV has display-label or stable-ID headers
+and optional marked subtotal rows; grand totals are excluded from CSV. The legacy
+query CSV option retains raw result IDs and marked subtotals. Export metadata and
+data resolve in the same fresh caller session; personal labels cannot add fields.
+DATE values become native Excel dates; timestamp strings retain their timezone.
+Formula-like text is stored as literal XLSX strings and neutralized for CSV. XLSX
+rejects oversized/unsupported cell text instead of truncating it and caps each
+sheet's page data at 500,000 cells. See [export layout](export-layout.md).
 
 The mock provider has deterministic 12,000-row chemical data, a six-row product
 lookup and a 120-column experimental relation. It runs the same validation before execution.

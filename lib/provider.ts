@@ -19,6 +19,7 @@ import {
   type Dataset,
   type RelationJoin,
   type PersonalTable,
+  type FieldOverride,
   validateDataset,
   datasetSchema,
   savedSchema,
@@ -28,7 +29,8 @@ import { mockSources, mockRows, executeMock, defaultDatasets } from "./mock";
 import { compileQuery, validateQuery, relation, identifier } from "./compiler";
 import { headers } from "next/headers";
 import { validatePersonalTable } from "./personal";
-import { validateFieldOverrides } from "./definitions";
+import { applyFieldOverrides, validateFieldOverrides } from "./definitions";
+import type { ExportContext } from "./export-model";
 import { semanticDraft } from "./semantic-draft";
 import { appObject, privateWrite, currentPrincipal } from "./private-storage";
 import {
@@ -395,6 +397,16 @@ export async function runQuery(
   datasetId?: string,
   signal?: AbortSignal,
 ): Promise<Result> {
+  return (await runQueryWithContext(input, datasetId, signal)).result;
+}
+
+// Query execution and export metadata share one freshly restricted caller session.
+export async function runQueryWithContext(
+  input: unknown,
+  datasetId?: string,
+  signal?: AbortSignal,
+  overrides: FieldOverride[] = [],
+): Promise<ExportContext> {
   const parsed = (await import("./model")).querySchema.parse(input);
   const run = async (
     s: QueryableSource,
@@ -403,15 +415,28 @@ export async function runQuery(
       binds?: (string | number | boolean)[],
     ) => Promise<Rows>,
   ) => {
+    let datasetName: string | undefined;
+    let joinName: string | undefined;
+    let joinVersion: number | undefined;
     if (datasetId) {
       const state = await loadState(exec);
       const d = state.datasets.find(
         (d) => d.id === datasetId && d.source === s.id,
       );
       if (!d) throw Error("Dataset unavailable");
+      datasetName = d.name;
       s = {
         ...s,
-        fields: s.fields.filter((f) => d.fields.some((df) => df.id === f.id)),
+        fields: s.fields
+          .filter((f) => d.fields.some((df) => df.id === f.id))
+          .map((f) => {
+            const definition = d.fields.find((df) => df.id === f.id)!;
+            return {
+              ...f,
+              label: definition.label,
+              description: definition.description,
+            };
+          }),
       };
     }
     if (exec)
@@ -426,6 +451,7 @@ export async function runQuery(
     if (parsed.join && "rightSource" in parsed.join) {
       const join = parsed.join;
       const right = await resolveSource(join.rightSource, exec);
+      joinName = `${right.database}.${right.schema}.${right.name}`;
       output = relationJoinedSource(s, right, join);
       validateQuery(parsed, output);
       const counts = await relationCounts(s, right, join, exec);
@@ -445,10 +471,17 @@ export async function runQuery(
     if (personalJoin && !table)
       throw Error("個人テーブルにアクセスできません。");
     if (table) {
+      joinName = table.name;
+      joinVersion = table.version;
       output = joinedSource(s, personalJoin!, table);
       compile = (q) => compileJoinedQuery(q, s, table);
       if (!exec) data = joinMockRows(mockRows(s), s, personalJoin!, table);
     }
+    validateFieldOverrides(overrides, output.fields);
+    output = {
+      ...output,
+      fields: applyFieldOverrides(output.fields, overrides),
+    };
     const start = performance.now();
     const execute = async (q: Query): Promise<Result> => {
       const compiled = compile(q);
@@ -508,7 +541,15 @@ export async function runQuery(
       }
     }
     result.elapsedMs = Math.round(performance.now() - start);
-    return result;
+    return {
+      result,
+      query: parsed,
+      source: output,
+      datasetName,
+      joinName,
+      joinVersion,
+      exportedAt: new Date(),
+    };
   };
   if (mockMode()) return run(await resolveSource(parsed.source));
   return withSnowflake(

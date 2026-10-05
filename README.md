@@ -37,7 +37,9 @@ are needed. Mock saved metadata persists in `.snowlens-mock.json` (gitignored).
 - Download a reviewable Semantic View SQL draft for a permitted publisher or admin.
   The app does not execute publication DDL or grants.
 - Click a cell to include/exclude, group, drill, inspect detail or copy; return with Undo.
-- Save raw or curated views, favorite sources, find recent items, and export a bounded CSV page.
+- Save raw or curated views, favorite sources and find recent items. Download bounded
+  Excel reports with conditions and exact totals, plus a reusable native data table.
+  CSV remains available with display-label or stable-ID headers and optional marked subtotals.
 - Publish a Dataset without code: exposed fields, labels, descriptions, recommendations,
   current default query and drill candidates. Semantic metrics retain Snowflake definitions.
   Owners can map a semantic Dataset to physical detail columns; every condition
@@ -64,6 +66,8 @@ and [Snowflake deployment](docs/deployment.md). The [UX review](docs/ux-review.m
 records tested flows, fixes and known limits. Licensed under MIT.
 The [UX principles](docs/ux-principles.md), [private storage and permissions](docs/permissions-storage.md)
 and [join/publication design](docs/join-publication.md) document the current boundaries.
+The [export layout and crosstab design](docs/export-layout.md) separates current
+Excel/CSV behavior from proposed two-axis pivot layouts.
 
 For actual two-user policy/rights checks, see [live validation](docs/runtime-validation.md).
 `npm run test:live` requires local authenticated test-user states and direct-caller

@@ -52,7 +52,8 @@ duplicate storage IDs fail closed. Review standard-table concurrency and retenti
 limits in the storage design. General joins permit a unique right-side key only;
 their counts and policies require live validation. Semantic publication stops at
 downloadable DDL for a permitted publisher/admin to review and execute separately.
-CSV exports the current bounded page. Live results are requested afresh on each
+Excel and CSV export the current bounded page. Excel includes conditions and
+source-computed totals plus a native table without subtotal rows. Live results are requested afresh on each
 operation; errors remove previous results. Refresh after policy or data changes.
 Semantic fact drill-through uses an owner-configured separately accessible raw
 relation, explicit dimension-to-column mappings and published detail columns.

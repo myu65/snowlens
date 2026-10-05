@@ -1439,6 +1439,55 @@ summary > span {
   overflow: hidden;
   max-height: 90dvh;
 }
+.download-dialog {
+  width: min(540px, 92vw);
+}
+.download-scope {
+  padding: 10px 12px;
+  background: #f5f7fa;
+  border-radius: 6px;
+  font-size: 12px;
+}
+.download-formats {
+  border: 0;
+  padding: 0;
+  margin: 16px 0;
+}
+.download-formats legend {
+  font-size: 12px;
+  margin-bottom: 8px;
+}
+.download-formats label {
+  display: flex;
+  align-items: center;
+  gap: 12px;
+  border: 1px solid var(--line);
+  border-radius: 8px;
+  padding: 14px;
+  margin-bottom: 8px;
+  cursor: pointer;
+}
+.download-formats label.active {
+  border-color: var(--accent);
+  background: #eef6f6;
+}
+.download-formats span {
+  min-width: 0;
+}
+.download-formats small {
+  display: block;
+  color: var(--muted);
+  margin-top: 4px;
+  font-size: 12px;
+}
+.download-description p {
+  font-size: 12px;
+  line-height: 1.8;
+}
+.dialog-body > label.download-checkbox {
+  flex-direction: row;
+  align-items: center;
+}
 .fixed-dialog > .dialog-title {
   flex-shrink: 0;
   margin-bottom: 12px;
