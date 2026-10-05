@@ -1,5 +1,18 @@
 "use client";
-import { useState, useEffect, useCallback, useRef } from "react";
+import {
+  useState,
+  useEffect,
+  useCallback,
+  useRef,
+  type DragEvent,
+} from "react";
+import {
+  composeColumns,
+  moveItem,
+  type ComposeTarget,
+  type ComposeAggregation,
+} from "@/lib/compose";
+import { fieldMime, readFieldDrag } from "./components/field-drag";
 import {
   type QueryableSource,
   type Query,
@@ -9,6 +22,8 @@ import {
   type Field,
   type Value,
   type SavedView,
+  type PersonalTable,
+  type FieldOverride,
   initialQuery,
   metricKey,
   isNumeric,
@@ -16,6 +31,14 @@ import {
   operators,
 } from "@/lib/model";
 import { recommendedQuery } from "@/lib/mock";
+import SemanticDraftEditor from "./components/semantic-draft-editor";
+import TableJoinBuilder from "./components/table-join-builder";
+import { relationJoinedSource } from "@/lib/relation-join";
+import PersonalFieldsEditor from "./components/personal-fields-editor";
+import { applyFieldOverrides } from "@/lib/definitions";
+import PersonalTableEditor from "./components/personal-table-editor";
+import JoinBuilder from "./components/join-builder";
+import { personalFields } from "@/lib/personal";
 import FactDetail from "./components/fact-detail";
 import Grid from "./components/grid";
 import CatalogBrowser from "./components/catalog-browser";
@@ -28,6 +51,7 @@ const emptyState: AppState = {
   saved: [],
   favorites: [],
   recent: [],
+  personalTables: [],
 };
 const opLabels: Record<string, string> = {
   eq: "等しい",
@@ -46,6 +70,7 @@ const aggLabels: Record<string, string> = {
   MIN: "最小 MIN",
   MAX: "最大 MAX",
   COUNT: "件数 COUNT",
+  COUNT_ROWS: "行数 COUNT *",
   COUNT_DISTINCT: "種類数 COUNT DISTINCT",
   SEMANTIC: "定義済み",
 };
@@ -81,6 +106,19 @@ export default function SnowLens() {
     [side, setSide] = useState(true),
     [picker, setPicker] = useState<Picker>(),
     [recentFields, setRecentFields] = useState<string[]>([]),
+    [personalEditor, setPersonalEditor] = useState<{
+      table?: PersonalTable;
+      afterJoin?: boolean;
+    }>(),
+    [fieldOverrides, setFieldOverrides] = useState<FieldOverride[]>([]),
+    [editingFields, setEditingFields] = useState(false),
+    [semanticDraftOpen, setSemanticDraftOpen] = useState(false),
+    [savingView, setSavingView] = useState(false),
+    [joiningTables, setJoiningTables] = useState(false),
+    [joinedRight, setJoinedRight] = useState<QueryableSource>(),
+    [joining, setJoining] = useState(false),
+    [joinTableHint, setJoinTableHint] = useState<string>(),
+    [deletePersonal, setDeletePersonal] = useState<PersonalTable>(),
     [owner, setOwner] = useState(false),
     [save, setSave] = useState(false),
     [saveName, setSaveName] = useState(""),
@@ -92,6 +130,10 @@ export default function SnowLens() {
     [history, setHistory] = useState<Query[]>([]),
     [intro, setIntro] = useState(false),
     [retry, setRetry] = useState(0),
+    [selectedColumns, setSelectedColumns] = useState<string[]>([]),
+    [composeAggregation, setComposeAggregation] =
+      useState<ComposeAggregation>("auto"),
+    [dropTarget, setDropTarget] = useState<"dimension" | "metric">(),
     [homeTab, setHomeTab] = useState("all");
   const cache = useRef(new Map<string, Result>()),
     requestId = useRef(0),
@@ -125,12 +167,17 @@ export default function SnowLens() {
     setState(next);
     return next;
   }, []);
+  const personalTableId =
+    query?.join && "tableId" in query.join ? query.join.tableId : undefined;
+  const personalVersion = state.personalTables?.find(
+    (t) => t.id === personalTableId,
+  )?.version;
   useEffect(() => {
     if (!query) return;
     const id = ++requestId.current,
       controller = new AbortController();
-    const key = JSON.stringify([query, dataset?.id]);
-    const cached = cache.current.get(key);
+    const key = JSON.stringify([query, dataset?.id, personalVersion]);
+    const cached = mode === "mock" ? cache.current.get(key) : undefined;
     if (cached) setResult(cached);
     setBusy(true);
     setError("");
@@ -144,14 +191,16 @@ export default function SnowLens() {
             controller.signal,
           ));
         if (requestId.current === id) {
-          cache.current.set(key, data);
+          if (mode === "mock") cache.current.set(key, data);
           if (cache.current.size > 30)
             cache.current.delete(cache.current.keys().next().value!);
           setResult(data);
         }
       } catch (e) {
-        if (!controller.signal.aborted && requestId.current === id)
+        if (!controller.signal.aborted && requestId.current === id) {
           setError((e as Error).message);
+          if (mode === "snowflake") setResult(undefined);
+        }
       } finally {
         if (requestId.current === id) setBusy(false);
       }
@@ -160,7 +209,7 @@ export default function SnowLens() {
       clearTimeout(timer);
       controller.abort();
     };
-  }, [query, dataset?.id, retry]);
+  }, [query, dataset?.id, retry, personalVersion, mode]);
   async function open(
     s: Pick<QueryableSource, "id">,
     d?: Dataset,
@@ -172,24 +221,49 @@ export default function SnowLens() {
     setNotice("");
     setCell(undefined);
     setFactQuery(undefined);
+    setJoining(false);
     try {
       const full = await api<QueryableSource>(
         "/api/catalog?source=" + encodeURIComponent(s.id),
       );
       if (id !== openId.current) return;
       window.scrollTo(0, 0);
+      if (saved?.datasetId && !d)
+        throw Error("保存した表示のDatasetを利用できません。");
+      const savedRight =
+        saved?.query.join && "rightSource" in saved.query.join
+          ? await api<QueryableSource>(
+              "/api/catalog?source=" +
+                encodeURIComponent(saved.query.join.rightSource),
+            )
+          : undefined;
+      if (id !== openId.current) return;
+      setJoinedRight(savedRight);
       setSource(full);
       setDataset(d);
+      setFieldOverrides(saved?.fieldOverrides || []);
+      setEditingFields(false);
       setQuery(saved?.query || d?.defaultView || initialQuery(full));
       setResult(undefined);
       setHistory([]);
       setIntro(!d && !saved);
-      setSide(!!d || !!saved);
+      setSide(true);
+      setSelectedColumns([]);
       void mutate("recent", s.id).catch((e) => setNotice(e.message));
     } catch (e) {
       setError((e as Error).message);
     } finally {
       if (id === openId.current) setOpening(false);
+    }
+  }
+  async function editPersonal(id: string) {
+    try {
+      const table = await api<PersonalTable>(
+        "/api/personal-table?id=" + encodeURIComponent(id),
+      );
+      setPersonalEditor({ table });
+    } catch (e) {
+      setError((e as Error).message);
     }
   }
   function home() {
@@ -198,7 +272,14 @@ export default function SnowLens() {
     setSource(undefined);
     setQuery(undefined);
     setDataset(undefined);
+    setFieldOverrides([]);
+    setEditingFields(false);
     setFactQuery(undefined);
+    setJoining(false);
+    setJoiningTables(false);
+    setSemanticDraftOpen(false);
+    setJoinedRight(undefined);
+    setSelectedColumns([]);
     setError("");
     setNotice("");
     setOpening(false);
@@ -207,12 +288,14 @@ export default function SnowLens() {
     if (!query) return;
     setBusy(true);
     if (remember) setHistory((h) => [...h, query]);
-    if (patch.dimensions || patch.metrics || patch.detail !== undefined)
+    if (patch.dimensions || patch.metrics || patch.detail !== undefined) {
       setIntro(false);
+      setSelectedColumns([]);
+    }
     setQuery({ ...query, ...patch, offset: patch.offset ?? 0 });
     setCell(undefined);
   }
-  const fields =
+  const baseFields =
     source?.fields
       .filter((f) => !dataset || dataset.fields.some((df) => df.id === f.id))
       .map((f) => {
@@ -226,9 +309,28 @@ export default function SnowLens() {
             }
           : f;
       }) || [];
+  const tableJoin =
+    query?.join && "rightSource" in query.join ? query.join : undefined;
+  const activeTable = state.personalTables?.find(
+    (t) => t.id === personalTableId,
+  );
+  const originalFields = [
+    ...baseFields,
+    ...(activeTable
+      ? personalFields(activeTable)
+      : tableJoin && joinedRight?.id === tableJoin.rightSource
+        ? relationJoinedSource(
+            { ...source!, fields: baseFields },
+            joinedRight,
+            tableJoin,
+          ).fields.slice(baseFields.length)
+        : []),
+  ];
+  const fields = applyFieldOverrides(originalFields, fieldOverrides);
   const label = (id: string) => {
     const metric = query?.metrics.find((m) => metricKey(m) === id);
     const field = fields.find((f) => f.id === (metric?.field || id));
+    if (metric?.aggregation === "COUNT_ROWS") return "行数";
     return (
       (field?.label || id) +
       (metric
@@ -239,100 +341,170 @@ export default function SnowLens() {
         : "")
     );
   };
-  async function choose(f: Field) {
-    const openIdAtSelection = openId.current;
-    if (!query) return;
-    setRecentFields((r) =>
-      [f.id, ...r.filter((id) => id !== f.id)].slice(0, 12),
-    );
-    if (picker === "dimension") {
-      change({
-        detail: false,
-        dimensions: [...new Set([...query.dimensions, f.id])],
-        sort: [],
-      });
-    } else if (picker === "metric") {
-      if (f.semantic === "metric" && source) {
-        try {
-          const full = await api<QueryableSource>(
-            "/api/catalog?source=" +
-              encodeURIComponent(source.id) +
-              "&metric=" +
-              encodeURIComponent(f.id),
-          );
-          if (openId.current !== openIdAtSelection) return;
-          const metric = full.fields.find((x) => x.id === f.id)!;
-          setSource((current) => ({
-            ...full,
-            fields: full.fields.map((field) => ({
-              ...current?.fields.find((previous) => previous.id === field.id),
-              ...field,
-            })),
-          }));
-          if (
-            metric.compatibleDimensions &&
-            query.dimensions.some(
-              (id) => !metric.compatibleDimensions!.includes(id),
-            )
-          ) {
-            setNotice(
-              "この指標では現在の行項目を使えません。行項目を変更してください。",
-            );
-            return;
-          }
-          const required = metric.requiredDimensions || [];
-          if (required.some((id) => !fields.some((field) => field.id === id))) {
-            setNotice("この指標に必要な行項目がDatasetで公開されていません。");
-            return;
-          }
-          change({
-            detail: false,
-            dimensions: [...new Set([...query.dimensions, ...required])],
-            metrics: [
-              ...query.metrics.filter((m) => m.field !== f.id),
-              { field: f.id, aggregation: "SEMANTIC" },
-            ],
-            sort: [],
-          });
-          if (required.length)
-            setNotice(
-              "指標に必要な行項目を追加しました: " +
-                required.map(label).join("、"),
-            );
-        } catch {
-          setNotice("指標の組み合わせを確認できません。再度選択してください。");
-        }
-        return;
-      }
-      const aggregation =
-        f.semantic === "metric" ? "SEMANTIC" : isNumeric(f) ? "SUM" : "COUNT";
-      change({
-        detail: false,
-        metrics: [
-          ...query.metrics.filter(
-            (m) => !(m.field === f.id && m.aggregation === aggregation),
+  const selectedVisible = selectedColumns.filter(
+    (id) => result?.columns.includes(id) && fields.some((f) => f.id === id),
+  );
+  async function compose(
+    ids: string[],
+    target: ComposeTarget,
+    aggregation: ComposeAggregation = "auto",
+    stage = false,
+  ) {
+    if (!query || !source) return;
+    const opened = openId.current;
+    const previous = query;
+    const selectedRequest = requestId.current;
+    try {
+      let available = fields;
+      const selectedMetrics = ids.filter(
+        (id) => fields.find((f) => f.id === id)?.semantic === "metric",
+      );
+      if (target !== "dimension" && selectedMetrics.length) {
+        const checked = await Promise.allSettled(
+          selectedMetrics.map((id) =>
+            api<QueryableSource>(
+              "/api/catalog?source=" +
+                encodeURIComponent(source.id) +
+                "&metric=" +
+                encodeURIComponent(id),
+            ),
           ),
-          { field: f.id, aggregation },
-        ],
-        sort: [],
-      });
-    } else if (picker === "filter") {
-      change({
-        filters: [
-          ...query.filters,
-          {
-            field: f.id,
-            operator: "eq",
-            value: isNumeric(f)
-              ? 0
-              : f.type === "BOOLEAN"
-                ? false
-                : /DATE/.test(f.type)
-                  ? "2026-10-01"
-                  : "",
-          },
-        ],
-      });
+        );
+        if (opened !== openId.current || selectedRequest !== requestId.current)
+          return;
+        const verified: Field[] = [];
+        for (let i = 0; i < checked.length; i++) {
+          const check = checked[i];
+          if (check.status === "rejected")
+            throw Error(
+              "指標の組み合わせを確認できません。再度選択してください。",
+            );
+          const metric = check.value.fields.find(
+            (f) => f.id === selectedMetrics[i],
+          );
+          if (!metric) throw Error("この指標を利用できません。");
+          verified.push(metric);
+        }
+        available = fields.map((f) => ({
+          ...f,
+          ...verified.find((v) => v.id === f.id),
+          label: f.label,
+          description: f.description,
+        }));
+        setSource((s) =>
+          s
+            ? {
+                ...s,
+                fields: s.fields.map((f) => ({
+                  ...f,
+                  ...verified.find((v) => v.id === f.id),
+                })),
+              }
+            : s,
+        );
+      }
+      const next = composeColumns(
+        previous,
+        available,
+        ids,
+        target,
+        aggregation,
+      );
+      if (stage && previous.detail) next.detail = true;
+      change(next, true);
+      setSide(true);
+      setRecentFields((recent) =>
+        [...new Set([...ids, ...recent])].slice(0, 12),
+      );
+      const requiredAdded = next.dimensions.filter(
+        (id) => !previous.dimensions.includes(id) && !ids.includes(id),
+      );
+      setNotice(
+        requiredAdded.length
+          ? "指標に必要な行項目を追加しました: " +
+              requiredAdded.map(label).join("、")
+          : "",
+      );
+    } catch (e) {
+      setNotice((e as Error).message);
+    }
+  }
+  function startColumns(event: DragEvent<HTMLElement>, id: string) {
+    const ids = selectedVisible.includes(id) ? selectedVisible : [id];
+    event.dataTransfer.setData(
+      fieldMime,
+      JSON.stringify({ kind: "columns", ids }),
+    );
+    event.dataTransfer.effectAllowed = "copy";
+    setSide(true);
+  }
+  function startItem(
+    event: DragEvent<HTMLElement>,
+    kind: "dimension" | "metric",
+    index: number,
+  ) {
+    event.dataTransfer.setData(fieldMime, JSON.stringify({ kind, index }));
+    event.dataTransfer.effectAllowed = "move";
+  }
+  function dragOver(
+    event: DragEvent<HTMLElement>,
+    target: "dimension" | "metric",
+  ) {
+    if (!event.dataTransfer.types.includes(fieldMime)) return;
+    event.preventDefault();
+    setDropTarget(target);
+  }
+  function dropFields(
+    event: DragEvent<HTMLElement>,
+    target: "dimension" | "metric",
+    index?: number,
+  ) {
+    const dragged = readFieldDrag(event.dataTransfer);
+    setDropTarget(undefined);
+    if (!dragged || !query) return;
+    event.preventDefault();
+    event.stopPropagation();
+    if (dragged.kind === "columns")
+      void compose(dragged.ids, target, "auto", true);
+    else if (dragged.kind === target && index !== undefined)
+      change(
+        target === "dimension"
+          ? {
+              dimensions: moveItem(query.dimensions, dragged.index, index),
+              sort: [],
+            }
+          : {
+              metrics: moveItem(query.metrics, dragged.index, index),
+              sort: [],
+            },
+        true,
+      );
+  }
+  function choose(f: Field) {
+    if (!query) return;
+    setRecentFields((recent) =>
+      [f.id, ...recent.filter((id) => id !== f.id)].slice(0, 12),
+    );
+    if (picker === "filter") {
+      change(
+        {
+          filters: [
+            ...query.filters,
+            {
+              field: f.id,
+              operator: "eq",
+              value: isNumeric(f)
+                ? 0
+                : f.type === "BOOLEAN"
+                  ? false
+                  : /DATE/.test(f.type)
+                    ? "2026-10-01"
+                    : "",
+            },
+          ],
+        },
+        true,
+      );
     } else if (picker === "drill") {
       change(
         { detail: false, dimensions: [f.id], filters: cellFilter(), sort: [] },
@@ -495,6 +667,41 @@ export default function SnowLens() {
               )}
             </div>
           </section>
+          <section>
+            <div className="section-heading">
+              <div>
+                <h2>個人テーブル</h2>
+                <span>自分の分類・目標値を作って結合</span>
+              </div>
+              <button onClick={() => setPersonalEditor({})}>
+                ＋ 個人テーブルを作る
+              </button>
+            </div>
+            <div className="personal-cards">
+              {(state.personalTables || []).map((t) => (
+                <div className="personal-card" key={t.id}>
+                  <button onClick={() => void editPersonal(t.id)}>
+                    <strong>{t.name}</strong>
+                    <small>
+                      {(t.rowCount ?? t.rows.length).toLocaleString()}行 ·{" "}
+                      {t.columns.length}列 · 自分のみ
+                    </small>
+                  </button>
+                  <button
+                    aria-label={`${t.name}を削除`}
+                    onClick={() => setDeletePersonal(t)}
+                  >
+                    削除
+                  </button>
+                </div>
+              ))}
+              {!state.personalTables?.length && (
+                <p className="muted">
+                  Excelからの貼り付けや手入力で、小さな表を作れます。
+                </p>
+              )}
+            </div>
+          </section>
           {state.saved.length > 0 && (
             <section>
               <div className="section-heading">
@@ -510,7 +717,7 @@ export default function SnowLens() {
                       void open(s || { id: v.query.source }, d, v);
                     }}
                   >
-                    ☆ {v.name}
+                    ☆ {v.name} <span className="private-scope">自分のみ</span>
                     <small>
                       {sources.find((s) => s.id === v.query.source)?.name}
                     </small>
@@ -688,13 +895,115 @@ export default function SnowLens() {
               >
                 ☆ 表示を保存
               </button>
-              <button className="primary" onClick={() => setOwner(true)}>
+              <button onClick={() => setEditingFields(true)}>
+                自分用の項目名
+              </button>
+              <button
+                disabled={source.kind === "semantic_view" || !query}
+                title={
+                  source.kind === "semantic_view"
+                    ? "結合には元のTable / View / Dynamic Tableを開いてください"
+                    : undefined
+                }
+                onClick={() => {
+                  setJoinTableHint(undefined);
+                  setJoining(true);
+                }}
+              >
+                個人テーブルを結合
+              </button>
+              <button
+                disabled={source.kind === "semantic_view" || !query}
+                onClick={() => setJoiningTables(true)}
+              >
+                テーブル同士を結合
+              </button>
+              <button onClick={() => setSemanticDraftOpen(true)}>
+                Semantic Viewの下書き
+              </button>
+              <button
+                className="primary"
+                disabled={!!query?.join}
+                title={
+                  query?.join ? "結合は「表示を保存」で保存できます" : undefined
+                }
+                onClick={() => setOwner(true)}
+              >
                 {dataset ? "Datasetを編集" : "Datasetとして公開"}
               </button>
             </div>
           </div>
           {query && (
             <>
+              {query.join && (
+                <div className="join-banner">
+                  <strong>
+                    ▦ {activeTable?.name || joinedRight?.name || "結合先"}
+                  </strong>
+                  <span>
+                    {label(query.join.sourceField)} ={" "}
+                    {"tableField" in query.join
+                      ? activeTable?.columns.find(
+                          (c) =>
+                            c.id ===
+                            ("tableField" in query.join!
+                              ? query.join.tableField
+                              : ""),
+                        )?.label || query.join.tableField
+                      : joinedRight?.fields.find(
+                          (f) =>
+                            f.id ===
+                            ("rightField" in query.join!
+                              ? query.join.rightField
+                              : ""),
+                        )?.label || query.join.rightField}{" "}
+                    ·{" "}
+                    {query.join.type === "left"
+                      ? "元データをすべて残す"
+                      : "一致する行だけ"}
+                  </span>
+                  <button
+                    onClick={() => {
+                      if (tableJoin) setJoiningTables(true);
+                      else {
+                        setJoinTableHint(undefined);
+                        setJoining(true);
+                      }
+                    }}
+                  >
+                    結合を変更
+                  </button>
+                  {activeTable && (
+                    <button onClick={() => void editPersonal(activeTable.id)}>
+                      個人テーブルを編集
+                    </button>
+                  )}
+                  <button
+                    onClick={() => {
+                      const allowed = new Set(baseFields.map((f) => f.id));
+                      change(
+                        {
+                          join: undefined,
+                          dimensions: query.dimensions.filter((id) =>
+                            allowed.has(id),
+                          ),
+                          metrics: query.metrics.filter((m) =>
+                            allowed.has(m.field),
+                          ),
+                          filters: query.filters.filter((f) =>
+                            allowed.has(f.field),
+                          ),
+                          sort: [],
+                          detail: true,
+                        },
+                        true,
+                      );
+                    }}
+                  >
+                    結合を外す
+                  </button>
+                </div>
+              )}
               <div className="filterbar">
                 <span className="filter-label">検索条件</span>
                 {query.filters.map((f, i) => {
@@ -731,6 +1040,7 @@ export default function SnowLens() {
                           query={query}
                           index={i}
                           datasetId={dataset?.id}
+                          personalVersion={personalVersion}
                           onChange={(value) =>
                             change({
                               filters: query.filters.map((x, j) =>
@@ -814,23 +1124,85 @@ export default function SnowLens() {
                       ‹
                     </button>
                   </div>
-                  <p className="muted">行でまとめて、値を集計します。</p>
-                  <div className="settings-section">
+                  <p className="muted">
+                    表の列をここへドラッグ。置き終えたら集計します。
+                  </p>
+                  <div
+                    className={
+                      "settings-section field-drop" +
+                      (dropTarget === "dimension" ? " drag-over" : "")
+                    }
+                    aria-label="行項目のドロップ先"
+                    data-testid="row-drop-zone"
+                    onDragOver={(e) => dragOver(e, "dimension")}
+                    onDragLeave={() => setDropTarget(undefined)}
+                    onDrop={(e) => dropFields(e, "dimension")}
+                  >
                     <h3>
                       行 <span>グループ化</span>
                     </h3>
-                    {query.dimensions.map((id) => (
-                      <div className="selection" key={id}>
+                    {query.dimensions.map((id, index) => (
+                      <div
+                        className="selection"
+                        key={id}
+                        draggable
+                        onDragStart={(e) => startItem(e, "dimension", index)}
+                        onDragOver={(e) => dragOver(e, "dimension")}
+                        onDrop={(e) => dropFields(e, "dimension", index)}
+                      >
                         <span>{label(id)}</span>
+                        <span className="field-order">
+                          <button
+                            aria-label={`${label(id)}を行で上へ`}
+                            disabled={index === 0}
+                            onClick={() =>
+                              change(
+                                {
+                                  dimensions: moveItem(
+                                    query.dimensions,
+                                    index,
+                                    index - 1,
+                                  ),
+                                  sort: [],
+                                },
+                                true,
+                              )
+                            }
+                          >
+                            ↑
+                          </button>
+                          <button
+                            aria-label={`${label(id)}を行で下へ`}
+                            disabled={index === query.dimensions.length - 1}
+                            onClick={() =>
+                              change(
+                                {
+                                  dimensions: moveItem(
+                                    query.dimensions,
+                                    index,
+                                    index + 1,
+                                  ),
+                                  sort: [],
+                                },
+                                true,
+                              )
+                            }
+                          >
+                            ↓
+                          </button>
+                        </span>
                         <button
                           aria-label={`${label(id)}を行から削除`}
                           onClick={() =>
-                            change({
-                              dimensions: query.dimensions.filter(
-                                (d) => d !== id,
-                              ),
-                              sort: [],
-                            })
+                            change(
+                              {
+                                dimensions: query.dimensions.filter(
+                                  (d) => d !== id,
+                                ),
+                                sort: [],
+                              },
+                              true,
+                            )
                           }
                         >
                           ×
@@ -845,23 +1217,79 @@ export default function SnowLens() {
                     </button>
                     <small>ロット番号など、数値も使えます。</small>
                   </div>
-                  <div className="settings-section">
+                  <div
+                    className={
+                      "settings-section field-drop" +
+                      (dropTarget === "metric" ? " drag-over" : "")
+                    }
+                    aria-label="集計する値のドロップ先"
+                    data-testid="value-drop-zone"
+                    onDragOver={(e) => dragOver(e, "metric")}
+                    onDragLeave={() => setDropTarget(undefined)}
+                    onDrop={(e) => dropFields(e, "metric")}
+                  >
                     <h3>
                       値 <span>集計</span>
                     </h3>
                     {query.metrics.map((m, i) => (
-                      <div className="metric-selection" key={i}>
+                      <div
+                        className="metric-selection"
+                        key={metricKey(m)}
+                        draggable
+                        onDragStart={(e) => startItem(e, "metric", i)}
+                        onDragOver={(e) => dragOver(e, "metric")}
+                        onDrop={(e) => dropFields(e, "metric", i)}
+                      >
                         <div>
-                          <span>{label(m.field)}</span>
+                          <span>
+                            {m.aggregation === "COUNT_ROWS"
+                              ? "行数"
+                              : label(m.field)}
+                          </span>
+                          <span className="field-order">
+                            <button
+                              aria-label={`${label(metricKey(m))}を値で上へ`}
+                              disabled={i === 0}
+                              onClick={() =>
+                                change(
+                                  {
+                                    metrics: moveItem(query.metrics, i, i - 1),
+                                    sort: [],
+                                  },
+                                  true,
+                                )
+                              }
+                            >
+                              ↑
+                            </button>
+                            <button
+                              aria-label={`${label(metricKey(m))}を値で下へ`}
+                              disabled={i === query.metrics.length - 1}
+                              onClick={() =>
+                                change(
+                                  {
+                                    metrics: moveItem(query.metrics, i, i + 1),
+                                    sort: [],
+                                  },
+                                  true,
+                                )
+                              }
+                            >
+                              ↓
+                            </button>
+                          </span>
                           <button
                             aria-label={`${label(m.field)}を値から削除`}
                             onClick={() =>
-                              change({
-                                metrics: query.metrics.filter(
-                                  (_, j) => j !== i,
-                                ),
-                                sort: [],
-                              })
+                              change(
+                                {
+                                  metrics: query.metrics.filter(
+                                    (_, j) => j !== i,
+                                  ),
+                                  sort: [],
+                                },
+                                true,
+                              )
                             }
                           >
                             ×
@@ -871,18 +1299,21 @@ export default function SnowLens() {
                           aria-label={`${label(m.field)}の集計方法`}
                           value={m.aggregation}
                           onChange={(e) =>
-                            change({
-                              metrics: query.metrics.map((x, j) =>
-                                j === i
-                                  ? {
-                                      ...x,
-                                      aggregation: e.target
-                                        .value as typeof m.aggregation,
-                                    }
-                                  : x,
-                              ),
-                              sort: [],
-                            })
+                            change(
+                              {
+                                metrics: query.metrics.map((x, j) =>
+                                  j === i
+                                    ? {
+                                        ...x,
+                                        aggregation: e.target
+                                          .value as typeof m.aggregation,
+                                      }
+                                    : x,
+                                ),
+                                sort: [],
+                              },
+                              true,
+                            )
                           }
                         >
                           {aggregations
@@ -910,7 +1341,29 @@ export default function SnowLens() {
                     >
                       ＋ 値を追加
                     </button>
+                    {source.kind !== "semantic_view" && fields.length > 0 && (
+                      <button
+                        className="add-field"
+                        onClick={() =>
+                          void compose([fields[0].id], "metric", "COUNT_ROWS")
+                        }
+                      >
+                        ＋ 行数を追加
+                      </button>
+                    )}
                   </div>
+                  {query.detail &&
+                    (query.dimensions.length > 0 ||
+                      query.metrics.length > 0) && (
+                      <button
+                        className="primary compose-apply"
+                        onClick={() =>
+                          change({ detail: false, sort: [] }, true)
+                        }
+                      >
+                        この項目で集計
+                      </button>
+                    )}
                   <button
                     className={
                       query.detail ? "detail-toggle selected" : "detail-toggle"
@@ -982,12 +1435,145 @@ export default function SnowLens() {
                       </button>
                     </div>
                   </div>
+                  {result && (
+                    <div
+                      className="column-actions"
+                      aria-label="選択した列の操作"
+                    >
+                      {selectedVisible.length ? (
+                        <>
+                          <strong>{selectedVisible.length}列を選択中</strong>
+                          <button
+                            className="primary"
+                            onClick={() =>
+                              void compose(selectedVisible, "auto")
+                            }
+                          >
+                            選択列で集計
+                          </button>
+                          <button
+                            onClick={() =>
+                              void compose(selectedVisible, "dimension")
+                            }
+                          >
+                            行に追加
+                          </button>
+                          <select
+                            aria-label="選択列の集計方法"
+                            value={composeAggregation}
+                            onChange={(e) =>
+                              setComposeAggregation(
+                                e.target.value as ComposeAggregation,
+                              )
+                            }
+                          >
+                            <option value="auto">おすすめの集計</option>
+                            {aggregations
+                              .filter(
+                                (a) => a !== "SEMANTIC" && a !== "COUNT_ROWS",
+                              )
+                              .map((a) => (
+                                <option key={a} value={a}>
+                                  {aggLabels[a]}
+                                </option>
+                              ))}
+                          </select>
+                          <button
+                            onClick={() =>
+                              void compose(
+                                selectedVisible,
+                                "metric",
+                                composeAggregation,
+                              )
+                            }
+                          >
+                            値に追加
+                          </button>
+                          <button onClick={() => setSelectedColumns([])}>
+                            選択を解除
+                          </button>
+                        </>
+                      ) : (
+                        <span>
+                          列のチェックでまとめて選択 · 列名を行・値へドラッグ
+                        </span>
+                      )}
+                      {!query.detail && query.metrics.length > 0 && (
+                        <div className="totals-controls">
+                          <label>
+                            <input
+                              type="checkbox"
+                              aria-label="総計を表示"
+                              checked={query.totals !== "off"}
+                              onChange={(e) =>
+                                change(
+                                  {
+                                    totals: e.target.checked ? "grand" : "off",
+                                  },
+                                  true,
+                                )
+                              }
+                            />
+                            総計
+                          </label>
+                          <label
+                            title={
+                              source.kind === "semantic_view"
+                                ? "定義済みの指標は総計で確認できます"
+                                : "行項目の順番に沿って小計を表示"
+                            }
+                          >
+                            <input
+                              type="checkbox"
+                              aria-label="小計を表示"
+                              disabled={
+                                source.kind === "semantic_view" ||
+                                query.dimensions.length < 2
+                              }
+                              checked={query.totals === "subtotals"}
+                              onChange={(e) =>
+                                change(
+                                  {
+                                    totals: e.target.checked
+                                      ? "subtotals"
+                                      : "grand",
+                                    sort: [],
+                                  },
+                                  true,
+                                )
+                              }
+                            />
+                            小計
+                          </label>
+                        </div>
+                      )}
+                    </div>
+                  )}
                   {result ? (
                     <Grid
                       result={result}
                       label={label}
                       sort={query.sort}
                       busy={busy}
+                      dimensions={query.dimensions}
+                      selectableColumns={fields.map((f) => f.id)}
+                      selectedColumns={selectedVisible}
+                      sortableColumns={
+                        query.totals === "subtotals"
+                          ? query.dimensions
+                          : undefined
+                      }
+                      onSelectColumn={(id) => {
+                        setSelectedColumns((ids) =>
+                          ids.includes(id)
+                            ? ids.filter((c) => c !== id)
+                            : ids.length >= 24
+                              ? ids
+                              : [...ids, id],
+                        );
+                        setSide(true);
+                      }}
+                      onDragColumn={startColumns}
                       onSort={(id) =>
                         change({
                           sort: [
@@ -1014,8 +1600,51 @@ export default function SnowLens() {
                       <p>おすすめ表示から始めることもできます。</p>
                     </div>
                   )}
+                  {!query.detail &&
+                    query.metrics.length > 0 &&
+                    query.totals !== "off" &&
+                    result && (
+                      <section
+                        className="summary-bar"
+                        aria-label="条件に合う全行の総計"
+                        aria-busy={busy}
+                      >
+                        <div>
+                          <strong>総計</strong>
+                          <small>
+                            {busy ? "総計を更新中…" : "条件に合う全行"}
+                          </small>
+                        </div>
+                        {result.grandTotal ? (
+                          query.metrics.map((m) => {
+                            const key = metricKey(m),
+                              value = result.grandTotal![key];
+                            return (
+                              <div key={key}>
+                                <small>{label(key)}</small>
+                                <output>
+                                  {value === null || value === undefined
+                                    ? "—"
+                                    : typeof value === "number"
+                                      ? value.toLocaleString("ja-JP", {
+                                          maximumFractionDigits: 2,
+                                        })
+                                      : String(value)}
+                                </output>
+                              </div>
+                            );
+                          })
+                        ) : (
+                          <p>{result.summaryNotice || "総計を読み込み中…"}</p>
+                        )}
+                      </section>
+                    )}
                   <div className="result-footer">
-                    <span>セルをクリックして、絞り込み・掘り下げ・明細へ</span>
+                    <span>
+                      {query.totals === "subtotals"
+                        ? "行項目の順番で小計を表示 · 小計もページの行数に含みます"
+                        : "セルをクリックして、絞り込み・掘り下げ・明細へ"}
+                    </span>
                     <div>
                       <select
                         aria-label="ページあたりの行数"
@@ -1076,7 +1705,20 @@ export default function SnowLens() {
               : f.semantic !== "metric",
           )}
           recent={recentFields}
-          onChoose={choose}
+          onChoose={(f) =>
+            picker === "dimension" || picker === "metric"
+              ? void compose([f.id], picker)
+              : void choose(f)
+          }
+          onChooseMany={
+            picker === "dimension" || picker === "metric"
+              ? (selected) =>
+                  void compose(
+                    selected.map((f) => f.id),
+                    picker,
+                  )
+              : undefined
+          }
           onClose={() => setPicker(undefined)}
         />
       )}
@@ -1178,6 +1820,112 @@ export default function SnowLens() {
           </section>
         </div>
       )}
+      {semanticDraftOpen && source && query && (
+        <SemanticDraftEditor
+          source={source}
+          query={query}
+          datasetId={dataset?.id}
+          onClose={() => setSemanticDraftOpen(false)}
+        />
+      )}
+      {editingFields && (
+        <PersonalFieldsEditor
+          fields={originalFields}
+          overrides={fieldOverrides}
+          onClose={() => setEditingFields(false)}
+          onApply={setFieldOverrides}
+        />
+      )}
+      {personalEditor && (
+        <PersonalTableEditor
+          existing={personalEditor.table}
+          onClose={() => setPersonalEditor(undefined)}
+          onSave={async (table) => {
+            await mutate("personal", table);
+            cache.current.clear();
+            setRetry((r) => r + 1);
+            setNotice("個人テーブルを保存しました。");
+            if (personalEditor.afterJoin) {
+              setJoinTableHint(table.id);
+              setJoining(true);
+            }
+          }}
+        />
+      )}
+      {joiningTables && source && query && (
+        <TableJoinBuilder
+          source={{ ...source, fields: baseFields }}
+          query={query}
+          sources={sources}
+          initialRight={joinedRight}
+          datasetId={dataset?.id}
+          onClose={() => setJoiningTables(false)}
+          onApply={(next, right) => {
+            setHistory((h) => [...h, query]);
+            setJoinedRight(right);
+            setQuery(next);
+            setIntro(false);
+            setSide(true);
+            setBusy(true);
+            setCell(undefined);
+          }}
+        />
+      )}
+      {joining && source && query && (
+        <JoinBuilder
+          source={{ ...source, fields: baseFields }}
+          query={query}
+          tables={state.personalTables || []}
+          datasetId={dataset?.id}
+          initialTableId={joinTableHint}
+          onClose={() => setJoining(false)}
+          onCreate={() => {
+            setJoining(false);
+            setPersonalEditor({ afterJoin: true });
+          }}
+          onApply={(next) => {
+            setHistory((h) => [...h, query]);
+            setQuery(next);
+            setIntro(false);
+            setSide(true);
+            setBusy(true);
+            setCell(undefined);
+          }}
+        />
+      )}
+      {deletePersonal && (
+        <div className="overlay">
+          <section
+            className="dialog compact"
+            role="dialog"
+            aria-label="個人テーブルを削除"
+          >
+            <h2>「{deletePersonal.name}」を削除</h2>
+            <p>このテーブルを使う保存した表示は、結合を開けなくなります。</p>
+            <div className="dialog-footer">
+              <button onClick={() => setDeletePersonal(undefined)}>
+                キャンセル
+              </button>
+              <button
+                onClick={() => {
+                  void mutate("personal_delete", {
+                    id: deletePersonal.id,
+                    version: deletePersonal.version,
+                  })
+                    .then(() => {
+                      cache.current.clear();
+                      setRetry((r) => r + 1);
+                      setDeletePersonal(undefined);
+                    })
+                    .catch((e) => setError(e.message));
+                }}
+              >
+                この個人テーブルを削除
+              </button>
+            </div>
+          </section>
+        </div>
+      )}
       {factQuery && dataset && (
         <FactDetail
           query={factQuery}
@@ -1214,7 +1962,12 @@ export default function SnowLens() {
                 ×
               </button>
             </div>
-            <p className="muted">行・集計方法・条件・並べ替えを保存します。</p>
+            <p className="muted">
+              結合・項目名・説明・集計・条件・並び順を、自分用の定義として保存します。
+            </p>
+            <p className="muted">
+              元データは保存せず、開くたびに現在の権限で読み込みます。個人テーブルの変更は保存した表示にも反映されます。
+            </p>
             <input
               autoFocus
               aria-label="保存する表示名"
@@ -1225,22 +1978,27 @@ export default function SnowLens() {
               <button onClick={() => setSave(false)}>キャンセル</button>
               <button
                 className="primary"
-                disabled={!saveName.trim()}
-                onClick={() =>
+                disabled={savingView || !saveName.trim()}
+                onClick={() => {
+                  setSavingView(true);
                   void mutate("saved", {
                     id: crypto.randomUUID(),
                     name: saveName,
                     query,
                     datasetId: dataset?.id,
+                    fieldOverrides: fieldOverrides.filter((f) =>
+                      fields.some((available) => available.id === f.id),
+                    ),
                   })
                     .then(() => {
                       setSave(false);
                       setNotice("表示を保存しました。ホームから再び開けます。");
                     })
                     .catch((e) => setError(e.message))
-                }
+                    .finally(() => setSavingView(false));
+                }}
               >
-                保存する
+                {savingView ? "保存中…" : "保存する"}
               </button>
             </div>
           </section>

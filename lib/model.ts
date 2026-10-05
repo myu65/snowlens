@@ -5,6 +5,7 @@ export const aggregations = [
   "MIN",
   "MAX",
   "COUNT",
+  "COUNT_ROWS",
   "COUNT_DISTINCT",
   "SEMANTIC",
 ] as const;
@@ -20,6 +21,58 @@ export const operators = [
   "not_null",
 ] as const;
 export type Value = string | number | boolean | null;
+export const personalTableSchema = z
+  .object({
+    id: z.string().regex(/^[a-zA-Z0-9_-]{1,80}$/),
+    name: z.string().trim().min(1).max(120),
+    columns: z
+      .array(
+        z
+          .object({
+            id: z.string().regex(/^[a-zA-Z][a-zA-Z0-9_]{0,31}$/),
+            label: z.string().trim().min(1).max(120),
+            type: z.enum(["TEXT", "NUMBER", "DATE", "BOOLEAN"]),
+          })
+          .strict(),
+      )
+      .min(1)
+      .max(12),
+    rows: z
+      .array(
+        z
+          .array(
+            z.union([
+              z.string().max(2000),
+              z.number().finite(),
+              z.boolean(),
+              z.null(),
+            ]),
+          )
+          .max(12),
+      )
+      .max(1000),
+    version: z.number().int().min(1).max(Number.MAX_SAFE_INTEGER).default(1),
+  })
+  .strict();
+export type PersonalTable = z.infer<typeof personalTableSchema>;
+export const personalJoinSchema = z
+  .object({
+    tableId: z.string().regex(/^[a-zA-Z0-9_-]{1,80}$/),
+    sourceField: z.string().min(1).max(255),
+    tableField: z.string().regex(/^[a-zA-Z][a-zA-Z0-9_]{0,31}$/),
+    type: z.enum(["left", "inner"]),
+  })
+  .strict();
+export type PersonalJoin = z.infer<typeof personalJoinSchema>;
+export const relationJoinSchema = z
+  .object({
+    rightSource: z.string().min(1).max(1000),
+    sourceField: z.string().min(1).max(255),
+    rightField: z.string().min(1).max(255),
+    type: z.enum(["left", "inner"]),
+  })
+  .strict();
+export type RelationJoin = z.infer<typeof relationJoinSchema>;
 export type Field = {
   recommended?: boolean;
   id: string;
@@ -77,6 +130,8 @@ export const querySchema = z
     detail: z.boolean().default(false),
     limit: z.number().int().min(1).max(1000).default(200),
     offset: z.number().int().min(0).max(100000).default(0),
+    join: z.union([personalJoinSchema, relationJoinSchema]).optional(),
+    totals: z.enum(["off", "grand", "subtotals"]).optional(),
   })
   .strict();
 export type Query = z.infer<typeof querySchema>;
@@ -85,6 +140,10 @@ export type Result = {
   columns: string[];
   hasMore: boolean;
   elapsedMs: number;
+  rowLevels?: number[];
+  dimensionCount?: number;
+  grandTotal?: Record<string, Value>;
+  summaryNotice?: string;
 };
 export const datasetSchema = z
   .object({
@@ -116,12 +175,21 @@ export const datasetSchema = z
   })
   .strict();
 export type Dataset = z.infer<typeof datasetSchema>;
+export const fieldOverrideSchema = z
+  .object({
+    id: z.string().min(1).max(255),
+    label: z.string().trim().min(1).max(120),
+    description: z.string().max(1000),
+  })
+  .strict();
+export type FieldOverride = z.infer<typeof fieldOverrideSchema>;
 export const savedSchema = z
   .object({
     id: z.string().regex(/^[a-zA-Z0-9_-]{1,80}$/),
     name: z.string().trim().min(1).max(120),
     query: querySchema,
     datasetId: z.string().optional(),
+    fieldOverrides: z.array(fieldOverrideSchema).max(500).optional(),
   })
   .strict();
 export type SavedView = z.infer<typeof savedSchema>;
@@ -130,6 +198,7 @@ export type AppState = {
   saved: SavedView[];
   favorites: string[];
   recent: string[];
+  personalTables?: (PersonalTable & { rowCount?: number })[];
 };
 export function inferRole(name: string, type: string): Field["suggested"] {
   return /NUMBER|DECIMAL|INT|FLOAT|DOUBLE/i.test(type) &&
@@ -140,7 +209,11 @@ export function inferRole(name: string, type: string): Field["suggested"] {
 export const isNumeric = (f: Field) =>
   /NUMBER|DECIMAL|INT|FLOAT|DOUBLE|REAL/i.test(f.type);
 export function metricKey(m: Query["metrics"][number]) {
-  return `${m.field}__${m.aggregation}`;
+  const key = `${m.field}__${m.aggregation}`;
+  if (key.length <= 255) return key;
+  let hash = 2166136261;
+  for (const c of m.field) hash = Math.imul(hash ^ c.charCodeAt(0), 16777619);
+  return `${m.field.slice(0, 160)}__${(hash >>> 0).toString(16)}__${m.aggregation}`;
 }
 export function initialQuery(source: QueryableSource): Query {
   return {

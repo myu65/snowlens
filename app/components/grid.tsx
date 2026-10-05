@@ -1,5 +1,5 @@
 "use client";
-import { useRef } from "react";
+import { useRef, type DragEvent } from "react";
 import { useVirtualizer } from "@tanstack/react-virtual";
 import type { Result, Value, Query } from "@/lib/model";
 export default function Grid({
@@ -10,6 +10,12 @@ export default function Grid({
   sort,
   busy,
   readOnly = false,
+  selectableColumns = [],
+  selectedColumns = [],
+  onSelectColumn,
+  onDragColumn,
+  dimensions = [],
+  sortableColumns,
 }: {
   result: Result;
   label: (id: string) => string;
@@ -18,6 +24,12 @@ export default function Grid({
   sort: Query["sort"];
   busy: boolean;
   readOnly?: boolean;
+  selectableColumns?: string[];
+  selectedColumns?: string[];
+  onSelectColumn?: (id: string) => void;
+  onDragColumn?: (event: DragEvent<HTMLElement>, id: string) => void;
+  dimensions?: string[];
+  sortableColumns?: string[];
 }) {
   const ref = useRef<HTMLDivElement>(null);
   // TanStack Virtual manages measurements outside React Compiler.
@@ -48,6 +60,7 @@ export default function Grid({
             <div
               role="columnheader"
               key={c}
+              className={selectedColumns.includes(c) ? "column-selected" : ""}
               aria-sort={
                 sort[0]?.field === c
                   ? sort[0].direction === "asc"
@@ -56,8 +69,26 @@ export default function Grid({
                   : "none"
               }
             >
+              {selectableColumns.includes(c) && onSelectColumn && (
+                <input
+                  type="checkbox"
+                  aria-label={`${label(c)}の列を選択`}
+                  checked={selectedColumns.includes(c)}
+                  onChange={() => onSelectColumn(c)}
+                />
+              )}
               <button
-                disabled={readOnly}
+                disabled={
+                  readOnly ||
+                  (!!sortableColumns && !sortableColumns.includes(c))
+                }
+                draggable={!readOnly && selectableColumns.includes(c)}
+                onDragStart={(e) => onDragColumn?.(e, c)}
+                title={
+                  selectableColumns.includes(c)
+                    ? "行・値へドラッグして追加"
+                    : undefined
+                }
                 onClick={() => onSort(c)}
                 aria-label={`${label(c)}で並べ替え`}
               >
@@ -79,12 +110,19 @@ export default function Grid({
         >
           {virtual.getVirtualItems().map((v) => {
             const row = result.rows[v.index];
+            const level = result.rowLevels?.[v.index] ?? dimensions.length;
+            const subtotal = level < dimensions.length;
             return (
               <div
                 role="row"
                 aria-rowindex={v.index + 2}
                 key={v.key}
-                className="grid-row"
+                className={"grid-row" + (subtotal ? " subtotal-row" : "")}
+                aria-label={
+                  subtotal
+                    ? `${String(row[dimensions[level - 1]] ?? "空欄")} 小計`
+                    : undefined
+                }
                 style={{
                   position: "absolute",
                   top: 0,
@@ -97,14 +135,18 @@ export default function Grid({
                 {result.columns.map((c) => (
                   <div role="cell" key={c}>
                     <button
-                      disabled={busy || readOnly}
+                      disabled={busy || readOnly || subtotal}
                       className={typeof row[c] === "number" ? "numeric" : ""}
                       onClick={() => onCell(row, c)}
                       title={
-                        readOnly ? undefined : "クリックして絞り込み・掘り下げ"
+                        readOnly || subtotal
+                          ? undefined
+                          : "クリックして絞り込み・掘り下げ"
                       }
                     >
-                      {row[c] === null ? (
+                      {subtotal && c === dimensions[level] ? (
+                        "小計"
+                      ) : row[c] === null ? (
                         <span className="muted">—</span>
                       ) : typeof row[c] === "number" ? (
                         row[c].toLocaleString("ja-JP", {

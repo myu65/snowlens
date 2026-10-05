@@ -14,8 +14,9 @@ Reviewed 2026-10-05 using the local production build, in-app browser and Playwri
   menu while choosing the next field, retaining the clicked row context.
 - Drill/detail applies the complete grouped row context, and Undo restores the
   prior query. Curated drill suggestions and raw field selection share the same model.
-- Keep the grid visible during loading or errors. Disable stale cell actions while
-  updating. Filter edits debounce 180ms and cancel prior requests.
+- Keep the grid visible during loading. Disable stale cell actions while updating.
+  Live errors remove previous results; mock retry tests retain the preview.
+  Filter edits debounce 180ms and cancel prior requests.
 - Keep raw recommendations available while paging/sorting detail rows. Once a
   grouping/value is chosen, retire the introductory prompt.
 - Add stable secondary sort fields to avoid jumping between ties on different pages.
@@ -62,8 +63,9 @@ requirements, CSV escaping and bounded request bodies.
   verification against a live Snowflake account.
 - Mock mode is one local user. Production state uses Snowflake storage and RBAC.
 - Offset pagination is not a consistent snapshot while data changes.
-- Modal focus trapping, URL/shareable query state, version conflicts and a more
-  granular owner workflow are candidates for subsequent releases.
+- Modal focus trapping, URL/shareable query state and Dataset/saved-definition
+  conflict handling remain follow-ups. Personal-table edits and deletes already
+  use versions; standard Snowflake table insertion races still need live evidence.
 - `npm audit --omit=dev` has no production vulnerabilities. Full audit currently
   reports a braces issue inherited by the Next.js ESLint toolchain; no patched
   compatible dependency is available. Do not lint untrusted projects with this setup.
@@ -81,3 +83,34 @@ requirements, CSV escaping and bounded request bodies.
   [drill preview](https://navi.wingarc.com/product/drsum/28385).
 - In-place hierarchy expansion and cross-tab layout remain later enhancements;
   neither is claimed as implemented in this follow-up.
+
+## Private composition follow-up
+
+Verified typed spreadsheet paste, personal LEFT/INNER lookup, unmatched rows,
+duplicate rejection, saved joins using the latest private table version, and private
+field names/descriptions. General two-node joins show exact row growth before
+Apply and reject a 24-million-row fanout in the synthetic example. Publication
+downloads a selected-field DDL draft; no publication or role grant is performed.
+
+Visible detail columns can be selected in bulk or dragged to the builder. Dragging
+keeps detail visible until Apply, preventing the next needed column from disappearing.
+Batch pickers and ordering buttons provide keyboard/touch alternatives. AVG and
+distinct subtotals are calculated at their own grain. Grand totals ignore page
+offset, keep filters/joins and stay in a fixed result footer. A real NULL group and
+its subtotal remain distinct in the grid and CSV. Subtotal cells cannot drill.
+The view saves grouping order, aggregate methods and total preferences together.
+
+Production-build Playwright journeys cover these interactions and 390px screens.
+Screenshots live under the ignored `artifacts/` folder. Unit checks also exercise
+identity-free storage write arguments, hostile bound private values, exact join
+count arithmetic, snapshot uniqueness checks, and invalid composed field sets.
+SQL procedure deployment, principal lifecycle and runtime policy behavior remain
+unverified in a live account; Issue #5 remains open.
+
+Screenshots use synthetic mock data, not a connected account:
+
+![Select visible columns together](images/columns-selected.png)
+
+![Subtotals and an exact grand average](images/grouped-subtotals.png)
+
+![Check lookup nodes and row growth](images/table-join-nodes.png)

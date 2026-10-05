@@ -8,12 +8,14 @@ export default function FilterValue({
   query,
   index,
   datasetId,
+  personalVersion,
   onChange,
 }: {
   field?: Field;
   query: Query;
   index: number;
   datasetId?: string;
+  personalVersion?: number;
   onChange: (value: Value) => void;
 }) {
   const id = useId();
@@ -29,11 +31,13 @@ export default function FilterValue({
     query.filters.filter((_, i) => i !== index),
     datasetId,
     filter.field,
+    query.join,
+    personalVersion,
   ]);
   useEffect(() => {
     if (!requested || date || boolean) return;
     const controller = new AbortController();
-    const [source, filters, dataset, column] = JSON.parse(context);
+    const [source, filters, dataset, column, join] = JSON.parse(context);
     void fetch("/api/query", {
       method: "POST",
       headers: { "Content-Type": "application/json" },
@@ -42,6 +46,7 @@ export default function FilterValue({
         datasetId: dataset ?? undefined,
         query: {
           source,
+          join: join ?? undefined,
           filters,
           dimensions: [column],
           metrics: [],
