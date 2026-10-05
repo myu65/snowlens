@@ -25,6 +25,32 @@ setup.sql、private-state.sql、dataset-state.sqlを実行し、表・Secure Fun
 
 入力は合成データです。終了後に個人入力、お気に入り、テストDataset、本人の対応、テストユーザーを削除しました。キーの秘密部分はファイルに保存していません。保存処理や行ポリシーを外して検証に合わせる変更は行っていません。
 
+## 個人入力のUBAC案をSQLで確認した内容
+
+通常の型付きテーブルを本人へ直接grantする案も、合成データで13項目を確認しました。現在のアプリの保存処理とは別の検証です。アカウントのDISABLE_USER_PRIVILEGE_GRANTSはfalseで、設定を変更せずに検証できました。
+
+テスト専用のmanaged access schemaに、CODE・LABELを持つ個人入力2表と、CODE・AMOUNTを持つ共有ソース1表を作りました。2ユーザーには同じ閲覧ロールを割り当て、共有ソースのSELECTはそのロール、個人入力のSELECT・INSERT・UPDATE・DELETEは各本人へ直接grantしました。入力の所有者とrestricted callerの実行所有者は管理者配下の専用ロールに分け、どちらにも共有ソースのSELECTや公開権限を付けていません。
+
+| 確認対象                 | 確認結果                                                                             |
+| ------------------------ | ------------------------------------------------------------------------------------ |
+| UBACの前提とテスト構成   | 設定を変えず、専用スキーマと共通閲覧ロールで構成できた                               |
+| 入力の所有者             | 管理者配下のロールが所有し、一般利用者に継承しなかった。共有ソースのSELECTも拒否した |
+| secondary roleと直接DML  | NONEでは拒否し、ALLで本人の入力のSELECT・INSERT・UPDATE・DELETEを実行できた          |
+| 他人の入力               | 同じ閲覧ロールでも、他人の表の参照とDMLを拒否した                                    |
+| 通常の結合               | 自分の入力と共有ソースは結合でき、他人の入力との結合は拒否した                       |
+| 再grantとDDL             | 本人からの再grant・置換・DROPと、managed schema内の表所有者からの再grantを拒否した   |
+| restricted callerの結合  | SELECTのcaller grantだけで各自の結合が成功し、他人の表を渡すと拒否した               |
+| restricted callerのDML   | 本人に直接UPDATEがあっても、UPDATEのcaller grantがなければ拒否した                   |
+| caller grantの撤回       | 本人の直接SELECTを保っても、caller SELECTを外すとプロシージャを拒否した              |
+| 名前の変更               | 認証したユーザーを改名して接続し直しても直接grantを維持した                          |
+| 元の名前の再利用         | 新しいユーザーは改名前の本人のgrantを引き継がなかった                                |
+| 本人のSELECTの撤回       | 既存セッションでも次の参照と結合を拒否した                                           |
+| 削除後の同名ユーザー作成 | DROP USER後に同名で作り直しても、以前の直接grantを得なかった                         |
+
+SQLプロシージャはEXECUTE AS RESTRICTED CALLERで作り、実行所有者へ必要なUSAGEとSELECTのcaller grantだけを付けました。直接権限だけで足りると仮定せず、caller grant側と本人側の権限を別々に撤回して確認しています。
+
+テスト用の表・プロシージャ・スキーマ・ユーザー・専用ロールと付随するgrantは終了後に削除しました。秘密キーはメモリー内だけで使いました。アプリの本人対応や保存先、セッション設定は変更していません。App Runtimeのservice token・caller tokenを使うセッション、アプリ内の作成・版管理、業務ソースの各ポリシーは、この検証の対象外です。[物理テーブルの設計案](permissions-storage.md#個人入力をubacの物理テーブルにする案)に未実装の条件を記載します。
+
 ## App Runtimeでまだ確認できない内容
 
 `snow app validate`は成功し、コードのアップロードとartifact repositoryの作成まで進みました。サーバー側のビルド開始時に、Snowflakeが次の理由でデプロイを拒否しました。

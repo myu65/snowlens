@@ -147,3 +147,17 @@ Attach account/version, deployment revision, synthetic fixture definitions,
 redacted query-history IDs, PASS/FAIL results and both role names to Issue #5.
 Do not attach tokens, cookies, auth state, real business rows or private results.
 Close it only after every check succeeds.
+
+## Gate for the proposed UBAC physical inputs
+
+The app currently uses bound JSON inputs. The proposed physical-table storage in
+[permissions/storage](permissions-storage.md) has direct SQL and restricted-caller
+SQL-procedure evidence only; it is not implemented or validated in App Runtime.
+Before enabling it, repeat the two-user checks through trusted ingress, verify
+effective secondary roles and session policies, and prove that user direct grants
+intersect with Runtime caller grants. Test each side's SELECT revocation separately.
+Enabling ALL must not widen the approved business-source or masking/row-policy scope.
+Also validate the input creation/grant lifecycle, partial-failure cleanup, registered
+principal binding, typed writes/version conflicts, rename/drop/name reuse and shared
+publication promotion. Input-owner roles must have no business SELECT or publication
+grants. Do not use owner credentials or enable a fallback if caller UBAC is denied.

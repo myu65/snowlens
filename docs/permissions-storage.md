@@ -10,7 +10,9 @@ Snowflakeの基本は、オブジェクトの権限をアクセス用のロー�
 
 App Runtimeのcaller権限は、サインインした利用者の既定ロールで実行されます。導入時は利用者側の権限と、Runtime側のcaller grantの両方で操作を許可します。SnowLensはブラウザー指定のロールへ切り替えません。実際のロールや行の制限が変わっても、個人保存の所有者は本人のIDで判断します。[App Runtimeの実行権限](https://docs.snowflake.com/en/developer-guide/snowflake-app-runtime/access-control#execution-context)
 
-ユーザーへの直接grantであるUBACは、個人開発や共同作業を補う選択肢です。ただし、共通の保存表へのSELECT grantだけでは本人の行に限定できません。SnowLensでは共通ロールと行ポリシーを使います。Personal Databaseには通常のテーブルデータを保存できないため、個人入力は通常のデータベースに置きます。[UBACの位置付け](https://docs.snowflake.com/en/user-guide/security-access-control-considerations#comparing-and-contrasting-rbac-with-ubac)、[Personal Databaseの対象](https://docs.snowflake.com/en/user-guide/personal-databases)
+ユーザーへの直接grantであるUBACは、個人開発や共同作業を補う選択肢です。現在の共通保存表では、SELECT grantだけでは本人の行に限定できないため、共通ロールと行ポリシーを使います。個人入力ごとに物理テーブルを作れば、本人への直接grantで表単位に分ける構成も使えます。後述の案では、この方式を通常の型付きテーブルとして扱います。[UBACの位置付け](https://docs.snowflake.com/en/user-guide/security-access-control-considerations#comparing-and-contrasting-rbac-with-ubac)
+
+Personal Databaseには通常のテーブルデータを保存できないため、どちらの方式でも個人入力は通常のデータベースに置きます。[Personal Databaseの対象](https://docs.snowflake.com/en/user-guide/personal-databases)
 
 導入時は、1つのデータベース内の権限をdatabase roleにまとめ、職務のaccount roleへ割り当てる構成も使えます。処理所有者のロールは管理者の階層に含め、最上位をSYSADMINへつなぎます。利用者やRuntimeに保存処理の所有者ロールを継承させません。通常のオブジェクト作成にはSYSADMIN配下のロールを使い、ACCOUNTADMINをアプリの実行ロールにしません。[ロールの階層と管理](https://docs.snowflake.com/en/user-guide/security-access-control-considerations#managing-custom-roles)
 
@@ -30,6 +32,34 @@ App Runtimeのcaller権限は、サインインした利用者の既定ロール
 本番の保存先はSnowflake内の通常の表です。ブラウザーやRuntimeのファイルシステムへ永続保存しません。小さな入力を毎回のクエリにバインドし、JSONから行に展開して結合します。利用者ごとの物理テーブル作成権限は要りません。一時テーブルはセッションをまたげないため、再利用する個人入力の保存先には使いません。[一時テーブルの仕様](https://docs.snowflake.com/en/user-guide/tables-temp-transient)
 
 ローカルのmockだけは、gitignoreしたJSONファイルに保存します。mockは1人用で、複数人の権限分離を検証する用途には使えません。
+
+## 個人入力をUBACの物理テーブルにする案
+
+個人入力ごとに通常の型付きテーブルを作り、本人へSELECTを直接grantする案です。個人の分類や目標値を、Snowflakeの通常のSQLでも結合できます。個人ロールは作りません。表示名・説明・条件などの個人定義は共通保存表に残し、入力の保存方法だけを分ける構成です。アプリの保存先を変更する実装はまだなく、現在は入力も共通保存表を使います。
+
+| 観点             | 現在の共通保存表             | UBACの物理テーブル案           |
+| ---------------- | ---------------------------- | ------------------------------ |
+| 入力の保存       | 本人ID付きのJSON             | 入力ごとの型付きテーブル       |
+| 本人の参照       | 共通SELECTと行ポリシー       | 本人への表単位のSELECT grant   |
+| 結合             | バインドしたJSONから行へ展開 | caller権限で通常のテーブル結合 |
+| 管理対象         | 個人入力の行と版             | 表、grant、本人との対応、版    |
+| 他ツールでの利用 | アプリが展開して利用         | 本人が通常のSQLで参照          |
+
+UBACではCREATEとOWNERSHIPをユーザーへ渡せず、future grantも使えません。表の所有者には、管理者だけが継承する個人入力用のロールを使います。共通の閲覧ロールで作成すると、そのロールを使う全員が所有者の権限を得るため、個人用の作成には使いません。[直接grantの制約](https://docs.snowflake.com/en/sql-reference/sql/grant-privilege-user)
+
+個人入力専用のmanaged access schemaに表を作り、grantはスキーマ管理者が本人へ付ける構成を想定しています。表の所有者はgrantを変更できません。入力用ロールには業務ソースのSELECTや公開権限を付けず、利用者とRuntimeには所有者ロールを渡しません。PUBLICや共通ロールへの入力表のSELECT、既存・future・inherited grantによる広い参照、WITH GRANT OPTIONは許可しません。[managed access schemaでのgrant](https://docs.snowflake.com/en/sql-reference/sql/grant-privilege-user#access-control-requirements)
+
+作成処理は、認証した本人IDを確認し、サーバー側で物理名を発行します。本人ID・入力ID・物理名・世代・版を管理側の対応表に記録し、型の確認、表の作成、入力の保存、本人へのgrantが終わってから利用可能にします。途中で失敗した表は一覧や結合に出さず、残った表とgrantを回収します。ブラウザーが指定したowner、ユーザー名、物理名、SQLを作成処理へ渡す設計にはしません。未登録の本人は作成・参照を拒否します。アプリのカタログから物理表を選ぶ場合にも、個人入力用スキーマの表はこの対応で確認します。
+
+初期案では、本人へ渡す表の直接権限はSELECTだけにします。アプリ内の編集は、本人との対応と版を確認する固定プロシージャで入力表だけを変更します。作成・grantの管理処理は既存の保存処理と分け、どちらにも業務ソースのSELECTや公開権限を追加しません。直接DMLを他ツールへ開放するとアプリの版管理とずれるため、別途更新・競合の設計が必要です。今回のSQL検証で試した直接DMLは、UBACの権限分離を確かめるテストです。
+
+直接grantが有効になる条件は、全secondary roleの有効化です。ALLは本人に割り当てた他のロールも有効にするため、導入先のセッションポリシー、行・マスキングポリシー、アプリのcaller grantの制限と合わせて確認します。入力表のSELECTと必要なUSAGEだけをRuntimeのcaller grantへ追加し、業務ソースは許可した範囲を保ちます。アプリのセッション設定は今回変更していません。App RuntimeでUBACを使えることは、通常のSQLセッションやSQLプロシージャだけでは確認できません。[secondary roleの動作](https://docs.snowflake.com/en/sql-reference/sql/use-secondary-roles)、[Runtimeのcaller権限](https://docs.snowflake.com/en/developer-guide/snowflake-app-runtime/access-control#execution-context)
+
+grantの宛先には管理側で確認した現在のSnowflakeユーザーを使い、アプリの所有者は変更しない本人IDで記録します。名前の変更では対応を更新し、削除・退職では本人の無効化と直接grantの撤回を行います。対応表を無効にするだけでは、アプリ外の直接SELECTは止まりません。再作成・復旧では対応を無効にしてから表とgrantを確認し、新しい世代を登録します。同じ物理名だけで古い入力へ差し替えません。アカウントのDISABLE_USER_PRIVILEGE_GRANTSは新しい直接grantを止める設定で、既存grantの撤回にはなりません。[アカウント設定の仕様](https://docs.snowflake.com/en/sql-reference/parameters#disable-user-privilege-grants)
+
+2026年10月6日の合成データによる直接SQL検証では、UBACの13項目が通りました。同じ閲覧ロールの2ユーザーを表単位に分け、本人の結合、権限撤回、名前の変更・再利用、削除後の再作成を確認しています。restricted callerのSQLプロシージャでも、本人に許可した表だけを結合でき、caller grantを外すと拒否されました。App Runtimeの検証はtrialアカウント制限で未実施です。[検証の範囲](snowflake-validation.md)
+
+この案を採用する場合も、個人入力を共有Semantic Viewから直接参照する公開は行いません。共有入力への移行、公開範囲と更新責任の確認を経て、[結合と公開の手順](join-publication.md)に進みます。
 
 ## 保存者はロールやユーザー名だけで決めない
 

@@ -69,6 +69,9 @@ and [Snowflake deployment](docs/deployment.md). The [UX review](docs/ux-review.m
 records tested flows, fixes and known limits. Licensed under MIT.
 The [UX principles](docs/ux-principles.md), [private storage and permissions](docs/permissions-storage.md)
 and [join/publication design](docs/join-publication.md) document the current boundaries.
+The storage design also evaluates private typed tables with direct user grants
+(UBAC). Synthetic direct SQL and restricted-caller procedure checks passed; this
+alternative is not implemented in the app or validated in App Runtime.
 The [export layout and crosstab design](docs/export-layout.md) separates current
 Excel/CSV behavior from proposed two-axis pivot layouts.
 
