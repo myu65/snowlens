@@ -42,7 +42,7 @@ export default function FactMappingEditor({
     }
   }
   return (
-    <div>
+    <div className="fact-mapping-editor">
       <h3>元データの明細</h3>
       <p className="muted">
         利用者自身にSELECT権限のある明細元を指定します。すべての検索条件と選んだ行の項目に対応づけが必要です。
@@ -72,6 +72,11 @@ export default function FactMappingEditor({
         }}
       >
         <option value="">明細元を選ぶ</option>
+        {target && !sources.some((s) => s.id === target.id) && (
+          <option value={target.id}>
+            {target.database}.{target.schema}.{target.name}
+          </option>
+        )}
         {sources
           .filter((s) => s.kind !== "semantic_view")
           .map((s) => (
@@ -80,7 +85,10 @@ export default function FactMappingEditor({
             </option>
           ))}
       </select>
-      {!sources.length && <CatalogBrowser onOpen={(s) => void select(s.id)} />}
+      <details>
+        <summary>別の明細元を探す</summary>
+        <CatalogBrowser onOpen={(s) => void select(s.id)} />
+      </details>
       {busy && <p role="status">項目を読み込み中…</p>}
       {error && <p role="alert">{error}</p>}
       {target && value && (

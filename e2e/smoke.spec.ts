@@ -469,6 +469,18 @@ test("semantic fact drill-through retains context, projects published fields and
   await expect(
     page.getByRole("columnheader").filter({ hasText: "売上" }),
   ).toBeVisible();
+  await page
+    .getByRole("button", { name: "Datasetを編集", exact: true })
+    .click();
+  const editor = page.getByRole("dialog", { name: "Datasetを公開" });
+  await editor
+    .getByRole("button", { name: "設定を読み込む", exact: true })
+    .click();
+  await expect(editor.getByLabel("PRODUCTの明細対応")).toHaveValue("PRODUCT");
+  await expect(editor.getByLabel("LOT_NOを明細に表示")).toBeChecked();
+  await editor.getByRole("button", { name: "公開する", exact: true }).click();
+  await expect(editor).toHaveCount(0);
+  await ready(page);
   const bad = await request.post("/api/fact-detail", {
     data: {
       datasetId: dataset.id,

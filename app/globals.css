@@ -1091,3 +1091,10 @@ summary > span {
 .fact-detail .dialog-footer {
   flex-shrink: 0;
 }
+
+.fact-mapping-editor > label {
+  display: grid;
+  grid-template-columns: minmax(100px, 1fr) minmax(140px, 2fr);
+  gap: 12px;
+  margin: 12px 0;
+}
