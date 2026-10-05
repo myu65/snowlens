@@ -283,3 +283,33 @@ test("preserves previous results during loading and retries errors", async ({
   await page.getByRole("button", { name: "再試行" }).click();
   await ready(page);
 });
+test("editing an existing detail Dataset refreshes unpublished columns", async ({
+  page,
+}) => {
+  await page.goto("/");
+  await page.getByRole("button", { name: /▦ ORDERS / }).click();
+  await ready(page);
+  await page.getByRole("button", { name: "Datasetとして公開" }).click();
+  await page.getByLabel("Dataset名", { exact: true }).fill("公開項目 E2E");
+  await page.getByRole("button", { name: "公開する", exact: true }).click();
+  await expect(page.getByRole("dialog", { name: "Datasetを公開" })).toHaveCount(
+    0,
+  );
+  await ready(page);
+  await expect(
+    page.getByRole("button", { name: "温度 °Cで並べ替え" }),
+  ).toHaveCount(1);
+  await page.getByRole("button", { name: "Datasetを編集" }).click();
+  await page.getByLabel("TEMPERATUREを公開").uncheck();
+  await page.getByRole("button", { name: "公開する", exact: true }).click();
+  await expect(page.getByRole("dialog", { name: "Datasetを公開" })).toHaveCount(
+    0,
+  );
+  await ready(page);
+  await expect(
+    page.getByRole("button", { name: "温度 °Cで並べ替え" }),
+  ).toHaveCount(0);
+  await expect(
+    page.getByRole("button", { name: "TEMPERATUREで並べ替え" }),
+  ).toHaveCount(0);
+});

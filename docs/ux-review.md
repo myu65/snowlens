@@ -31,6 +31,8 @@ Reviewed 2026-10-05 using the local production build, in-app browser and Playwri
   and conditions stay visible after browsing a long source list.
 - On desktop, keep the exploration workspace within the viewport with independent
   scrolling for settings and results; on phones use a stacked page layout.
+- Republishing an existing Dataset now refreshes the active query, so unpublished
+  detail columns disappear immediately without requiring the user to refresh.
 
 ## Validation scope
 
@@ -39,6 +41,7 @@ drill → detail → Undo; saved-view reload; numeric grouping; owner publishing
 favorite; CSV download; all four relation kinds in mock mode; row virtualization;
 pagination; empty result; retained result while loading; retry after a query error;
 390px responsive width; invalid API input and dataset field scope enforcement.
+An additional regression edits field exposure in an already-published detail Dataset.
 
 Unit tests cover SHOW metadata parsing, inference, native Semantic View aliases,
 pre-aggregation filtering without accidental grain changes, logical validation,

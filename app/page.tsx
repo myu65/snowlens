@@ -1090,6 +1090,7 @@ export default function SnowLens() {
             await mutate("dataset", d);
             setDataset(d);
             cache.current.clear();
+            setRetry((r) => r + 1);
             setNotice("Datasetを公開しました。ホームから開けます。");
           }}
         />
