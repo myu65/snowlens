@@ -8,17 +8,20 @@ export default function FieldPicker({
   onChoose,
   onClose,
   title,
+  onChooseMany,
 }: {
   fields: Field[];
   recent: string[];
   onChoose: (f: Field) => void;
   onClose: () => void;
   title: string;
+  onChooseMany?: (fields: Field[]) => void;
 }) {
   const [search, setSearch] = useState(""),
     [type, setType] = useState("all"),
     [category, setCategory] = useState("all"),
     [scope, setScope] = useState("all");
+  const [selected, setSelected] = useState<string[]>([]);
   const parent = useRef<HTMLDivElement>(null);
   const list = fields.filter(
     (f) =>
@@ -108,9 +111,9 @@ export default function FieldPicker({
             {virtual.getVirtualItems().map((v) => {
               const f = list[v.index];
               return (
-                <button
+                <div
                   key={f.id}
-                  className="field-choice"
+                  className="field-option"
                   style={{
                     position: "absolute",
                     top: 0,
@@ -118,24 +121,56 @@ export default function FieldPicker({
                     height: v.size,
                     width: "100%",
                   }}
-                  onClick={() => {
-                    onChoose(f);
-                    onClose();
-                  }}
                 >
-                  <span>
-                    <strong>{f.label}</strong>
-                    <small>
-                      {f.id} · {f.type}
-                    </small>
-                  </span>
-                  <span className="field-description">{f.description}</span>
-                </button>
+                  {onChooseMany && (
+                    <input
+                      type="checkbox"
+                      aria-label={`${f.label}を選択`}
+                      checked={selected.includes(f.id)}
+                      onChange={() =>
+                        setSelected((ids) =>
+                          ids.includes(f.id)
+                            ? ids.filter((id) => id !== f.id)
+                            : [...ids, f.id],
+                        )
+                      }
+                    />
+                  )}
+                  <button
+                    className="field-choice"
+                    onClick={() => {
+                      onChoose(f);
+                      onClose();
+                    }}
+                  >
+                    <span>
+                      <strong>{f.label}</strong>
+                      <small>
+                        {f.id} · {f.type}
+                      </small>
+                    </span>
+                    <span className="field-description">{f.description}</span>
+                  </button>
+                </div>
               );
             })}
           </div>
           {!list.length && <p>一致する項目がありません。</p>}
         </div>
+        {onChooseMany && selected.length > 0 && (
+          <div className="dialog-footer">
+            <button onClick={() => setSelected([])}>選択を解除</button>
+            <button
+              className="primary"
+              onClick={() => {
+                onChooseMany(fields.filter((f) => selected.includes(f.id)));
+                onClose();
+              }}
+            >
+              選んだ{selected.length}項目を追加
+            </button>
+          </div>
+        )}
       </section>
     </div>
   );

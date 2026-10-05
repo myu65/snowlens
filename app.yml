@@ -12,6 +12,12 @@ ignore:
   - .git
   - .env*
   - .snowlens-mock.json
+  - .snowlens-e2e.json
+  - .snowlens-mock.json.tmp
+  - .snowlens-e2e.json.tmp
+  - playwright-auth
+  - artifacts
+  - coverage
   - test-results
   - playwright-report
 environment_variables:
@@ -19,6 +25,8 @@ environment_variables:
     value: snowflake
   - name: SNOWLENS_METADATA_DATABASE
     value: SNOWFLAKE_APPS
+  - name: SNOWLENS_METADATA_SCHEMA
+    value: APP
 install:
   commands:
     - [npm, ci]

@@ -32,7 +32,7 @@ export async function POST(req: Request) {
     return NextResponse.json(
       {
         error:
-          /Unknown field|Invalid|Required semantic|Choose|Numeric|Sort|Duplicate|null operator|Source|Dataset/.test(
+          /個人テーブル|結合|小計|Unknown field|Invalid|Required semantic|Choose|Numeric|Sort|Duplicate|null operator|Source|Dataset/.test(
             message,
           )
             ? message

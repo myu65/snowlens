@@ -1,3 +1,4 @@
+import { z } from "zod";
 import { createHash } from "node:crypto";
 import {
   CatalogCache,
@@ -16,13 +17,34 @@ import {
   type Value,
   type Query,
   type Dataset,
+  type RelationJoin,
+  type PersonalTable,
   validateDataset,
+  datasetSchema,
   savedSchema,
 } from "./model";
 import { parseColumn, parseSource, callerToken } from "./metadata";
-import { mockSources, executeMock, defaultDatasets } from "./mock";
+import { mockSources, mockRows, executeMock, defaultDatasets } from "./mock";
 import { compileQuery, validateQuery, relation, identifier } from "./compiler";
 import { headers } from "next/headers";
+import { validatePersonalTable } from "./personal";
+import { validateFieldOverrides } from "./definitions";
+import { semanticDraft } from "./semantic-draft";
+import { appObject, privateWrite, currentPrincipal } from "./private-storage";
+import {
+  compileJoinedQuery,
+  joinedSource,
+  joinMockRows,
+  matchField,
+} from "./personal-join";
+import {
+  compileRelationQuery,
+  relationJoinedSource,
+  relationCountsSql,
+  mockRelationCounts,
+  joinRelationRows,
+  type JoinCounts,
+} from "./relation-join";
 import snowflake from "snowflake-sdk";
 export const mockMode = () => process.env.SNOWLENS_MODE !== "snowflake";
 type Rows = Record<string, unknown>[];
@@ -398,20 +420,95 @@ export async function runQuery(
         parsed.detail ? [] : parsed.metrics.map((m) => m.field),
         exec,
       );
-    const compiled = compileQuery(parsed, s);
-    if (!exec) return executeMock(parsed, s);
+    let output = s;
+    let compile = (q: Query) => compileQuery(q, s);
+    let data: Record<string, Value>[] | undefined;
+    if (parsed.join && "rightSource" in parsed.join) {
+      const join = parsed.join;
+      const right = await resolveSource(join.rightSource, exec);
+      output = relationJoinedSource(s, right, join);
+      validateQuery(parsed, output);
+      const counts = await relationCounts(s, right, join, exec);
+      if (counts.duplicateKeys)
+        throw Error(
+          "結合先のキーが重複しています。重複がないキーやViewを選んでください。",
+        );
+      compile = (q) => compileRelationQuery(q, s, right);
+      if (!exec)
+        data = joinRelationRows(mockRows(s), mockRows(right), s, right, join);
+    }
+    const personalJoin =
+      parsed.join && "tableId" in parsed.join ? parsed.join : undefined;
+    const table = personalJoin
+      ? await loadPersonalTable(personalJoin.tableId, exec)
+      : undefined;
+    if (personalJoin && !table)
+      throw Error("個人テーブルにアクセスできません。");
+    if (table) {
+      output = joinedSource(s, personalJoin!, table);
+      compile = (q) => compileJoinedQuery(q, s, table);
+      if (!exec) data = joinMockRows(mockRows(s), s, personalJoin!, table);
+    }
     const start = performance.now();
-    const raw = await exec(compiled.sql, compiled.binds);
-    return {
-      columns: compiled.columns,
-      rows: raw
-        .slice(0, parsed.limit)
-        .map((r) =>
+    const execute = async (q: Query): Promise<Result> => {
+      const compiled = compile(q);
+      if (!exec) return executeMock(q, output, data);
+      const raw = await exec(compiled.sql, compiled.binds);
+      if (
+        compiled.validationColumn &&
+        raw.some((r) => Number(r[compiled.validationColumn!]) !== 0)
+      )
+        throw Error(
+          "結合先のキーが重複しています。重複がないキーやViewを選んでください。",
+        );
+      const page = raw.slice(0, q.limit);
+      return {
+        columns: compiled.columns,
+        rows: page.map((r) =>
           Object.fromEntries(compiled.columns.map((c) => [c, normalize(r[c])])),
         ),
-      hasMore: raw.length > parsed.limit,
-      elapsedMs: Math.round(performance.now() - start),
+        hasMore: raw.length > q.limit,
+        elapsedMs: Math.round(performance.now() - start),
+        ...(compiled.levelColumn
+          ? {
+              rowLevels: page.map((r) => Number(r[compiled.levelColumn!])),
+              dimensionCount: q.dimensions.length,
+            }
+          : {}),
+      };
     };
+    const result = await execute(parsed);
+    if (!parsed.detail && parsed.metrics.length && parsed.totals !== "off") {
+      const required = output.fields.filter(
+        (f) =>
+          parsed.metrics.some((m) => m.field === f.id) &&
+          f.requiredDimensions?.length,
+      );
+      if (required.length) {
+        result.summaryNotice =
+          "この指標には行項目が必要なため、総計を表示できません。";
+      } else if (!parsed.dimensions.length) {
+        result.grandTotal = result.rows[0];
+      } else {
+        try {
+          const total = await execute({
+            ...parsed,
+            dimensions: [],
+            sort: [],
+            offset: 0,
+            limit: 1,
+            totals: "off",
+          });
+          result.grandTotal = total.rows[0];
+        } catch (e) {
+          if (signal?.aborted) throw e;
+          result.summaryNotice =
+            "総計を計算できません。指標の定義や権限を確認して再実行してください。";
+        }
+      }
+    }
+    result.elapsedMs = Math.round(performance.now() - start);
+    return result;
   };
   if (mockMode()) return run(await resolveSource(parsed.source));
   return withSnowflake(
@@ -429,22 +526,33 @@ function normalize(v: unknown): Value {
 const file = process.env.SNOWLENS_MOCK_FILE || ".snowlens-mock.json";
 let queue: Promise<unknown> = Promise.resolve();
 function metadataTable(kind = "personal") {
-  return [
-    process.env.SNOWLENS_METADATA_DATABASE || "SNOWFLAKE_APPS",
-    "APP",
-    kind === "dataset" ? "DATASETS" : "METADATA",
-  ]
-    .map(identifier)
-    .join(".");
+  return appObject(
+    kind === "dataset"
+      ? "DATASETS"
+      : kind === "personal"
+        ? "PERSONAL_TABLES"
+        : "METADATA",
+  );
 }
 export async function loadState(
   exec?: (sql: string, binds?: (string | number | boolean)[]) => Promise<Rows>,
+  includePersonalRows = false,
 ): Promise<AppState> {
   if (mockMode()) {
     try {
-      return JSON.parse(
+      const stored = JSON.parse(
         await readFile(/* turbopackIgnore: true */ file, "utf8"),
       );
+      const state: AppState = {
+        datasets: z.array(datasetSchema).parse(stored.datasets),
+        saved: z.array(savedSchema).parse(stored.saved),
+        favorites: z.array(z.string().min(1).max(1000)).parse(stored.favorites),
+        recent: z.array(z.string().min(1).max(1000)).parse(stored.recent),
+        personalTables: (stored.personalTables || []).map((t: unknown) =>
+          validatePersonalTable(t),
+        ),
+      };
+      return includePersonalRows ? state : stateForBrowser(state);
     } catch (e) {
       if ((e as NodeJS.ErrnoException).code !== "ENOENT")
         throw Error(
@@ -455,32 +563,65 @@ export async function loadState(
         saved: [],
         favorites: [],
         recent: [],
+        personalTables: [],
       };
     }
   }
-  if (!exec) return withSnowflake((e) => loadState(e));
+  if (!exec) return withSnowflake((e) => loadState(e, includePersonalRows));
   const rows = await exec(
-    `SELECT KIND, PAYLOAD, UPDATED_AT FROM ${metadataTable()} WHERE OWNER = CURRENT_USER() UNION ALL SELECT KIND, PAYLOAD, UPDATED_AT FROM ${metadataTable("dataset")} ORDER BY UPDATED_AT DESC`,
+    `SELECT KIND, ID, PAYLOAD, UPDATED_AT, 0 PERSONAL_ROWS FROM ${metadataTable("saved")} WHERE OWNER = ${currentPrincipal()} UNION ALL SELECT KIND, ID, ${includePersonalRows ? "PAYLOAD" : "OBJECT_INSERT(OBJECT_DELETE(PAYLOAD, 'rows'), 'rows', PARSE_JSON('[]'), TRUE)"} PAYLOAD, UPDATED_AT, ARRAY_SIZE(PAYLOAD:rows) PERSONAL_ROWS FROM ${metadataTable("personal")} WHERE OWNER = ${currentPrincipal()} UNION ALL SELECT KIND, ID, PAYLOAD, UPDATED_AT, 0 PERSONAL_ROWS FROM ${metadataTable("dataset")} ORDER BY UPDATED_AT DESC`,
   );
   const state: AppState = {
     datasets: [],
     saved: [],
     favorites: [],
     recent: [],
+    personalTables: [],
   };
+  const seen = new Set<string>();
   rows.forEach((r) => {
+    const key = JSON.stringify([r.KIND, r.ID]);
+    if (seen.has(key))
+      throw Error("保存内容が重複しています。管理者に確認してください。");
+    seen.add(key);
     const p = typeof r.PAYLOAD === "string" ? JSON.parse(r.PAYLOAD) : r.PAYLOAD;
     switch (r.KIND) {
-      case "dataset":
-        state.datasets.push(p);
+      case "personal": {
+        const table = validatePersonalTable(p);
+        const rowCount = Number(r.PERSONAL_ROWS);
+        if (
+          table.id !== r.ID ||
+          !Number.isInteger(rowCount) ||
+          rowCount < 0 ||
+          rowCount > 1000
+        )
+          throw Error("Invalid personal metadata");
+        state.personalTables!.push({
+          ...table,
+          rowCount,
+        });
         break;
-      case "saved":
-        state.saved.push(p);
+      }
+      case "dataset": {
+        const d = datasetSchema.parse(p);
+        if (d.id !== r.ID) throw Error("Invalid Dataset metadata");
+        state.datasets.push(d);
         break;
+      }
+      case "saved": {
+        const saved = savedSchema.parse(p);
+        if (saved.id !== r.ID) throw Error("Invalid Saved View metadata");
+        state.saved.push(saved);
+        break;
+      }
       case "favorite":
+        if (typeof p !== "string" || p !== r.ID || p.length > 1000)
+          throw Error("Invalid favorite metadata");
         state.favorites.push(p);
         break;
       case "recent":
+        if (typeof p !== "string" || p !== r.ID || p.length > 1000)
+          throw Error("Invalid recent metadata");
         state.recent.push(p);
         break;
     }
@@ -488,7 +629,13 @@ export async function loadState(
   return state;
 }
 export type StateAction = {
-  kind: "dataset" | "saved" | "favorite" | "recent";
+  kind:
+    | "dataset"
+    | "saved"
+    | "favorite"
+    | "recent"
+    | "personal"
+    | "personal_delete";
   payload: unknown;
 };
 export async function mutateState(action: StateAction): Promise<AppState> {
@@ -498,11 +645,47 @@ export async function mutateState(action: StateAction): Promise<AppState> {
       binds?: (string | number | boolean)[],
     ) => Promise<Rows>,
   ) => {
-    const state = await loadState(exec);
+    const state = await loadState(exec, mockMode());
     let payload: unknown = action.payload,
       id: string;
-    if (action.kind === "dataset") {
+    let expectedVersion = 0;
+    if (action.kind === "personal") {
+      const raw = validatePersonalTable(payload);
+      const existing = state.personalTables?.find((t) => t.id === raw.id);
+      if (!existing && (state.personalTables?.length || 0) >= 50)
+        throw Error("個人テーブルは50個までです。");
+      if (existing && raw.version !== existing.version)
+        throw Error(
+          "個人テーブルが更新されています。画面を再読み込みしてから保存してください。",
+        );
+      expectedVersion = existing?.version || 0;
+      const table = { ...raw, version: (existing?.version || 0) + 1 };
+      payload = table;
+      id = raw.id;
+      state.personalTables = [
+        table,
+        ...(state.personalTables || []).filter((t) => t.id !== id),
+      ];
+    } else if (action.kind === "personal_delete") {
+      const deletion = z
+        .object({ id: z.string(), version: z.number().int().positive() })
+        .strict()
+        .parse(payload);
+      const existing = state.personalTables?.find((t) => t.id === deletion.id);
+      if (!existing) throw Error("個人テーブルにアクセスできません。");
+      if (existing.version !== deletion.version)
+        throw Error(
+          "個人テーブルが更新されています。画面を再読み込みしてから削除してください。",
+        );
+      id = existing.id;
+      expectedVersion = existing.version;
+      state.personalTables = state.personalTables!.filter((t) => t.id !== id);
+    } else if (action.kind === "dataset") {
       const raw = (await import("./model")).datasetSchema.parse(payload);
+      if (raw.defaultView.join)
+        throw Error(
+          "結合した表示は共有Datasetに公開できません。表示を個人用に保存してください。",
+        );
       const s = await resolveSource(raw.source, exec);
       payload = validateDataset(raw, s);
       if (raw.factDetail)
@@ -519,7 +702,30 @@ export async function mutateState(action: StateAction): Promise<AppState> {
       state.datasets = [raw, ...state.datasets.filter((d) => d.id !== id)];
     } else if (action.kind === "saved") {
       const v = savedSchema.parse(payload);
-      validateQuery(v.query, await resolveSource(v.query.source, exec));
+      let source = await resolveSource(v.query.source, exec);
+      if (v.datasetId) {
+        const d = state.datasets.find(
+          (d) => d.id === v.datasetId && d.source === source.id,
+        );
+        if (!d) throw Error("Dataset unavailable");
+        source = restrictSource(
+          source,
+          d.fields.map((f) => f.id),
+        );
+      }
+      if (v.query.join && "tableId" in v.query.join) {
+        const table = await loadPersonalTable(v.query.join.tableId, exec);
+        if (!table) throw Error("個人テーブルにアクセスできません。");
+        source = joinedSource(source, v.query.join, table);
+      } else if (v.query.join && "rightSource" in v.query.join) {
+        source = relationJoinedSource(
+          source,
+          await resolveSource(v.query.join.rightSource, exec),
+          v.query.join,
+        );
+      }
+      validateQuery(v.query, source);
+      validateFieldOverrides(v.fieldOverrides || [], source.fields);
       payload = v;
       id = v.id;
       state.saved = [v, ...state.saved.filter((s) => s.id !== id)];
@@ -538,31 +744,22 @@ export async function mutateState(action: StateAction): Promise<AppState> {
         );
     }
     if (exec) {
-      if (action.kind === "favorite" && !state.favorites.includes(id)) {
-        await exec(
-          `DELETE FROM ${metadataTable()} WHERE OWNER = CURRENT_USER() AND KIND = ? AND ID = ?`,
-          [action.kind, id],
-        );
+      if (action.kind === "dataset") {
+        await exec(`CALL ${appObject("WRITE_DATASET")}(?, ?)`, [
+          id,
+          JSON.stringify(payload),
+        ]);
       } else {
-        // Dataset writes are also caller-rights: INSERT/UPDATE grants are the owner capability.
-        const foreign =
-          action.kind === "dataset"
-            ? await exec(
-                `SELECT ID FROM ${metadataTable("dataset")} WHERE ID = ? AND OWNER <> CURRENT_USER()`,
-                [id],
-              )
-            : [];
-        if (foreign.length)
-          throw Error("Only the dataset owner may update this definition");
-        await exec(
-          `MERGE INTO ${metadataTable(action.kind)} t USING (SELECT CURRENT_USER() OWNER, ? KIND, ? ID, PARSE_JSON(?) PAYLOAD) s ON t.OWNER=s.OWNER AND t.KIND=s.KIND AND t.ID=s.ID WHEN MATCHED THEN UPDATE SET PAYLOAD=s.PAYLOAD, UPDATED_AT=CURRENT_TIMESTAMP() WHEN NOT MATCHED THEN INSERT (OWNER,KIND,ID,PAYLOAD,UPDATED_AT) VALUES (s.OWNER,s.KIND,s.ID,s.PAYLOAD,CURRENT_TIMESTAMP())`,
-          [action.kind, id, JSON.stringify(payload)],
+        const write = privateWrite(
+          action.kind === "favorite" && !state.favorites.includes(id)
+            ? "favorite_delete"
+            : action.kind,
+          id,
+          payload,
+          expectedVersion,
         );
+        await exec(write.sql, write.binds);
       }
-      if (action.kind === "recent")
-        await exec(
-          `DELETE FROM ${metadataTable()} WHERE OWNER=CURRENT_USER() AND KIND='recent' AND ID NOT IN (SELECT ID FROM ${metadataTable()} WHERE OWNER=CURRENT_USER() AND KIND='recent' ORDER BY UPDATED_AT DESC LIMIT 20)`,
-        );
     } else {
       await writeFile(file + ".tmp", JSON.stringify(state), "utf8");
       await rename(file + ".tmp", file);
@@ -574,4 +771,160 @@ export async function mutateState(action: StateAction): Promise<AppState> {
   const work = queue.then(() => mutate());
   queue = work.catch(() => {});
   return work;
+}
+
+export async function previewPersonalJoin(
+  input: unknown,
+  datasetId?: string,
+  signal?: AbortSignal,
+) {
+  const q = (await import("./model")).querySchema.parse(input);
+  if (!q.join) throw Error("結合設定がありません。");
+  const run = async (
+    exec?: (
+      sql: string,
+      binds?: (string | number | boolean)[],
+    ) => Promise<Rows>,
+  ) => {
+    let source = await resolveSource(q.source, exec);
+    if (datasetId) {
+      const state = await loadState(exec);
+      const d = state.datasets.find(
+        (d) => d.id === datasetId && d.source === q.source,
+      );
+      if (!d) throw Error("Dataset unavailable");
+      source = restrictSource(
+        source,
+        d.fields.map((f) => f.id),
+      );
+    }
+    if (q.join && "rightSource" in q.join)
+      return relationCounts(
+        source,
+        await resolveSource(q.join.rightSource, exec),
+        q.join,
+        exec,
+      );
+    if (!q.join || !("tableId" in q.join))
+      throw Error("結合設定がありません。");
+    const table = await loadPersonalTable(q.join.tableId, exec);
+    if (!table) throw Error("個人テーブルにアクセスできません。");
+    const statistics: Query = {
+      ...q,
+      join: { ...q.join!, type: "left" },
+      detail: false,
+      dimensions: [],
+      metrics: [
+        { field: matchField, aggregation: "COUNT" },
+        { field: matchField, aggregation: "SUM" },
+      ],
+      sort: [],
+      offset: 0,
+      limit: 1,
+    };
+    const compiled = compileJoinedQuery(statistics, source, table, true);
+    const rows = exec
+      ? await exec(compiled.sql, compiled.binds)
+      : executeMock(
+          statistics,
+          joinedSource(source, q.join, table, true),
+          joinMockRows(mockRows(source), source, q.join, table),
+        ).rows;
+    const totalRows = Number(rows[0]?.[matchField + "__COUNT"] || 0),
+      matchedRows = Number(rows[0]?.[matchField + "__SUM"] || 0);
+    return {
+      totalRows,
+      matchedRows,
+      unmatchedRows: totalRows - matchedRows,
+      personalRows: table.rows.length,
+    };
+  };
+  return mockMode() ? run() : withSnowflake(run, signal);
+}
+
+async function relationCounts(
+  left: QueryableSource,
+  right: QueryableSource,
+  join: RelationJoin,
+  exec?: (sql: string, binds?: (string | number | boolean)[]) => Promise<Rows>,
+): Promise<JoinCounts> {
+  const sql = relationCountsSql(left, right, join);
+  if (!exec) return mockRelationCounts(mockRows(left), mockRows(right), join);
+  const rows = await exec(sql);
+  const result = rows[0];
+  const normalized = Object.fromEntries(
+    Object.entries(result).map(([k, v]) => [k, Number(v)]),
+  ) as JoinCounts;
+  if (Object.values(normalized).some((v) => !Number.isSafeInteger(v) || v < 0))
+    throw Error("結合の行数を正確に確認できません。");
+  return normalized;
+}
+export async function loadPersonalTable(
+  id: string,
+  exec?: (sql: string, binds?: (string | number | boolean)[]) => Promise<Rows>,
+): Promise<PersonalTable | undefined> {
+  if (mockMode())
+    return (await loadState(undefined, true)).personalTables?.find(
+      (t) => t.id === id,
+    );
+  if (!exec) return withSnowflake((e) => loadPersonalTable(id, e));
+  const rows = await exec(
+    `SELECT PAYLOAD FROM ${appObject("PERSONAL_TABLES")} WHERE OWNER=${currentPrincipal()} AND KIND='personal' AND ID=?`,
+    [id],
+  );
+  if (rows.length > 1)
+    throw Error(
+      "個人テーブルの保存内容が重複しています。管理者に確認してください。",
+    );
+  if (!rows.length) return undefined;
+  const p = rows[0].PAYLOAD;
+  return validatePersonalTable(typeof p === "string" ? JSON.parse(p) : p);
+}
+export function stateForBrowser(state: AppState): AppState {
+  return {
+    ...state,
+    personalTables: state.personalTables?.map((t) => ({
+      ...t,
+      rowCount: t.rowCount ?? t.rows.length,
+      rows: [],
+    })),
+  };
+}
+
+export async function prepareSemanticDraft(
+  input: unknown,
+  target: [string, string, string],
+  datasetId?: string,
+  signal?: AbortSignal,
+) {
+  const q = (await import("./model")).querySchema.parse(input);
+  const run = async (
+    exec?: (
+      sql: string,
+      binds?: (string | number | boolean)[],
+    ) => Promise<Rows>,
+  ) => {
+    let source = await resolveSource(q.source, exec);
+    if (datasetId) {
+      const d = (await loadState(exec)).datasets.find(
+        (d) => d.id === datasetId && d.source === source.id,
+      );
+      if (!d) throw Error("Dataset unavailable");
+      source = restrictSource(
+        source,
+        d.fields.map((f) => f.id),
+      );
+    }
+    const right =
+      q.join && "rightSource" in q.join
+        ? await resolveSource(q.join.rightSource, exec)
+        : undefined;
+    if (right && q.join && "rightSource" in q.join) {
+      const counts = await relationCounts(source, right, q.join, exec);
+      if (counts.duplicateKeys)
+        throw Error("公開できません。結合先のキーが重複しています。");
+    }
+    return semanticDraft(q, source, target, right);
+  };
+  return mockMode() ? run() : withSnowflake(run, signal);
 }

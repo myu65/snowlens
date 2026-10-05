@@ -85,6 +85,26 @@ export const mockSources: QueryableSource[] = entries.map(
             ),
   }),
 );
+mockSources.push({
+  id: "CHEM.MASTER.PRODUCTS",
+  database: "CHEM",
+  schema: "MASTER",
+  name: "PRODUCTS",
+  kind: "view",
+  description: "製品マスタ・製品ごとの分類",
+  rowCount: 6,
+  fields: [
+    common.find((f) => f.id === "PRODUCT")!,
+    {
+      id: "CATEGORY",
+      label: "製品分類",
+      type: "VARCHAR",
+      description: "製品の業務分類",
+      category: "製品",
+      suggested: "dimension",
+    },
+  ],
+});
 const products = [
   "アクリル樹脂 A-100",
   "エポキシ樹脂 E-200",
@@ -94,6 +114,11 @@ const products = [
   "触媒 C-600",
 ];
 export function mockRows(s: QueryableSource): Record<string, Value>[] {
+  if (s.name === "PRODUCTS")
+    return products.map((product, i) => ({
+      PRODUCT: product,
+      CATEGORY: i < 2 ? "樹脂" : "その他",
+    }));
   const measurements = s.fields.filter((f) => f.id.startsWith("MEASUREMENT_"));
   return Array.from({ length: 12000 }, (_, i) => {
     const row: Record<string, Value> = {
@@ -214,10 +239,14 @@ export function defaultDatasets(): Dataset[] {
     ),
   ];
 }
-export function executeMock(input: unknown, s: QueryableSource): Result {
+export function executeMock(
+  input: unknown,
+  s: QueryableSource,
+  data?: Record<string, Value>[],
+): Result {
   const start = performance.now();
   const q = validateQuery(input, s);
-  const rows = mockRows(s).filter((r) =>
+  const rows = (data || mockRows(s)).filter((r) =>
     q.filters.every((f) => {
       const v = r[f.field],
         t = f.value;
@@ -246,66 +275,101 @@ export function executeMock(input: unknown, s: QueryableSource): Result {
     ? s.fields.filter((f) => f.semantic !== "metric").map((f) => f.id)
     : [...q.dimensions, ...q.metrics.map(metricKey)];
   let result: Record<string, Value>[];
+  const rollup =
+    q.totals === "subtotals" &&
+    !q.detail &&
+    q.dimensions.length > 1 &&
+    q.metrics.length > 0;
+  const levels = new Map<Record<string, Value>, number>();
   if (q.detail)
     result = rows.map((r) => Object.fromEntries(columns.map((c) => [c, r[c]])));
   else {
-    const groups = new Map<string, typeof rows>();
-    rows.forEach((r) => {
-      const key = JSON.stringify(q.dimensions.map((id) => r[id]));
-      const group = groups.get(key) || [];
-      group.push(r);
-      groups.set(key, group);
-    });
-    if (!q.dimensions.length && !groups.size) groups.set("[]", []);
-    result = [...groups.values()].map((group) => {
-      const r: Record<string, Value> = Object.fromEntries(
-        q.dimensions.map((id) => [id, group[0]?.[id] ?? null]),
-      );
-      q.metrics.forEach((m) => {
-        const values = group
-          .map((row) => row[m.field])
-          .filter((v) => v !== null);
-        const nums = values.map(Number);
-        let v: Value = null;
-        switch (m.aggregation) {
-          case "SUM":
-          case "SEMANTIC":
-            v = values.length ? nums.reduce((a, b) => a + b, 0) : null;
-            break;
-          case "AVG":
-            v = values.length
-              ? nums.reduce((a, b) => a + b, 0) / nums.length
-              : null;
-            break;
-          case "COUNT":
-            v = values.length;
-            break;
-          case "COUNT_DISTINCT":
-            v = new Set(values).size;
-            break;
-          case "MIN":
-            v = values.length
-              ? values.reduce((a, b) => (a! < b! ? a : b))
-              : null;
-            break;
-          case "MAX":
-            v = values.length
-              ? values.reduce((a, b) => (a! > b! ? a : b))
-              : null;
-        }
-        r[metricKey(m)] = v;
+    result = [];
+    const grains = rollup
+      ? q.dimensions.map((_, i) => q.dimensions.slice(0, i + 1))
+      : [q.dimensions];
+    for (const grain of grains) {
+      const groups = new Map<string, typeof rows>();
+      rows.forEach((r) => {
+        const key = JSON.stringify(grain.map((id) => r[id]));
+        const group = groups.get(key) || [];
+        group.push(r);
+        groups.set(key, group);
       });
-      return r;
-    });
+      if (!grain.length && !groups.size) groups.set("[]", []);
+      result.push(
+        ...[...groups.values()].map((group) => {
+          const r: Record<string, Value> = Object.fromEntries(
+            q.dimensions.map((id) => [
+              id,
+              grain.includes(id) ? (group[0]?.[id] ?? null) : null,
+            ]),
+          );
+          q.metrics.forEach((m) => {
+            const values = group
+              .map((row) => row[m.field])
+              .filter((v) => v !== null);
+            const nums = values.map(Number);
+            let v: Value = null;
+            switch (m.aggregation) {
+              case "SUM":
+              case "SEMANTIC":
+                v = values.length ? nums.reduce((a, b) => a + b, 0) : null;
+                break;
+              case "AVG":
+                v = values.length
+                  ? nums.reduce((a, b) => a + b, 0) / nums.length
+                  : null;
+                break;
+              case "COUNT":
+                v = values.length;
+                break;
+              case "COUNT_ROWS":
+                v = group.length;
+                break;
+              case "COUNT_DISTINCT":
+                v = new Set(values).size;
+                break;
+              case "MIN":
+                v = values.length
+                  ? values.reduce((a, b) => (a! < b! ? a : b))
+                  : null;
+                break;
+              case "MAX":
+                v = values.length
+                  ? values.reduce((a, b) => (a! > b! ? a : b))
+                  : null;
+            }
+            r[metricKey(m)] = v;
+          });
+          levels.set(r, grain.length);
+          return r;
+        }),
+      );
+    }
   }
-  const order = q.sort.length
-    ? q.sort
-    : columns.map((field) => ({ field, direction: "asc" as const }));
+  const order = rollup
+    ? q.dimensions.map((field) => ({
+        field,
+        direction:
+          q.sort.find((o) => o.field === field)?.direction || ("asc" as const),
+      }))
+    : q.sort.length
+      ? q.sort
+      : columns.map((field) => ({ field, direction: "asc" as const }));
   result.sort((a, b) => {
     for (const o of order) {
       const x = a[o.field],
         y = b[o.field];
-      if (x === y) continue;
+      if (x === y) {
+        if (rollup) {
+          const index = q.dimensions.indexOf(o.field);
+          const grouping =
+            Number(index >= levels.get(a)!) - Number(index >= levels.get(b)!);
+          if (grouping) return grouping;
+        }
+        continue;
+      }
       if (x === null) return 1;
       if (y === null) return -1;
       const c = x! < y! ? -1 : 1;
@@ -318,6 +382,14 @@ export function executeMock(input: unknown, s: QueryableSource): Result {
     columns,
     hasMore: result.length > q.offset + q.limit,
     elapsedMs: Math.round(performance.now() - start),
+    ...(rollup
+      ? {
+          rowLevels: result
+            .slice(q.offset, q.offset + q.limit)
+            .map((r) => levels.get(r)!),
+          dimensionCount: q.dimensions.length,
+        }
+      : {}),
   };
 }
 export function recommendedQuery(s: QueryableSource, id: string): Query {

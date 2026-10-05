@@ -8,9 +8,22 @@ export function exportCsv(result: Result): string {
   return (
     "\ufeff" +
     [
-      result.columns.map(cell).join(","),
-      ...result.rows.map((r) =>
-        result.columns.map((c) => cell(r[c])).join(","),
+      [...(result.rowLevels ? ["行の種類"] : []), ...result.columns]
+        .map(cell)
+        .join(","),
+      ...result.rows.map((r, index) =>
+        [
+          ...(result.rowLevels
+            ? [
+                result.rowLevels[index] < (result.dimensionCount || 0)
+                  ? "小計"
+                  : "集計行",
+              ]
+            : []),
+          ...result.columns.map((c) => r[c]),
+        ]
+          .map(cell)
+          .join(","),
       ),
     ].join("\r\n")
   );

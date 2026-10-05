@@ -558,3 +558,472 @@ test("semantic metric selection adds required dimensions from metadata", async (
     page.getByText(/指標に必要な行項目を追加しました/),
   ).toBeVisible();
 });
+
+test("Access-style personal table: paste, join, group, save, reopen and edit", async ({
+  page,
+}) => {
+  await page.goto("/");
+  await page
+    .getByRole("button", { name: "＋ 個人テーブルを作る", exact: true })
+    .click();
+  const editor = page.getByRole("dialog", { name: "個人テーブルを編集" });
+  await editor
+    .getByLabel("個人テーブル名", { exact: true })
+    .fill("E2E 個人分類");
+  await editor.locator("summary").click();
+  await editor
+    .getByLabel("表を貼り付け", { exact: true })
+    .fill(
+      "製品\t個人分類\nアクリル樹脂 A-100\t重点\n存在しない製品\tその他"
+        .replaceAll("\\t", "\t")
+        .replaceAll("\\n", "\n"),
+    );
+  await editor
+    .getByRole("button", { name: "貼り付けを読み込む", exact: true })
+    .click();
+  await expect(
+    editor.getByLabel("1行目 個人分類", { exact: true }),
+  ).toHaveValue("重点");
+  await editor
+    .getByRole("button", { name: "個人テーブルを保存", exact: true })
+    .click();
+  await expect(editor).toHaveCount(0);
+  await page.getByRole("button", { name: /DATASET 受注実績/ }).click();
+  await ready(page);
+  await page
+    .getByRole("button", { name: "個人テーブルを結合", exact: true })
+    .click();
+  const builder = page.getByRole("dialog", { name: "個人テーブルを結合" });
+  await builder
+    .getByLabel("元データの結合キー", { exact: true })
+    .selectOption("PRODUCT");
+  await builder
+    .getByLabel("個人テーブルの結合キー", { exact: true })
+    .selectOption("c1");
+  await builder
+    .getByRole("button", { name: "結合を確認", exact: true })
+    .click();
+  await expect(builder.getByRole("status")).toContainText("一致 2,000行");
+  await expect(builder.getByRole("status")).toContainText("未一致 10,000行");
+  await page.screenshot({ path: "artifacts/personal-join-builder.png" });
+  await builder
+    .getByRole("button", { name: "この結合で見る", exact: true })
+    .click();
+  await ready(page);
+  await page
+    .getByRole("button", { name: "＋ 行の項目を追加", exact: true })
+    .click();
+  await pick(page, "行の項目を選ぶ", "E2E 個人分類 · 個人分類");
+  await ready(page);
+  await expect(
+    page.getByRole("cell").getByRole("button", { name: "重点", exact: true }),
+  ).toBeVisible();
+  await page.getByRole("button", { name: "☆ 表示を保存", exact: true }).click();
+  await page.getByLabel("保存する表示名").fill("個人分類で分析 E2E");
+  await page.getByRole("button", { name: "保存する", exact: true }).click();
+  await page.getByRole("button", { name: /SnowLens/ }).click();
+  await page.getByRole("button", { name: /個人分類で分析 E2E/ }).click();
+  await ready(page);
+  await expect(
+    page.getByRole("cell").getByRole("button", { name: "重点", exact: true }),
+  ).toBeVisible();
+  await page
+    .getByRole("button", { name: "個人テーブルを編集", exact: true })
+    .click();
+  await editor.getByLabel("1行目 個人分類", { exact: true }).fill("最重点");
+  await editor
+    .getByRole("button", { name: "個人テーブルを保存", exact: true })
+    .click();
+  await ready(page);
+  await expect(
+    page.getByRole("cell").getByRole("button", { name: "最重点", exact: true }),
+  ).toBeVisible();
+  await page.screenshot({ path: "artifacts/personal-joined-result.png" });
+  await page.getByRole("button", { name: "結合を変更", exact: true }).click();
+  await builder.getByLabel("一致する行だけ見る", { exact: true }).check();
+  await builder
+    .getByRole("button", { name: "結合を確認", exact: true })
+    .click();
+  await expect(
+    builder.getByRole("button", { name: "この結合で見る", exact: true }),
+  ).toBeEnabled();
+  await builder
+    .getByRole("button", { name: "この結合で見る", exact: true })
+    .click();
+  await ready(page);
+  await expect(
+    page.getByRole("cell").getByRole("button", { name: "最重点", exact: true }),
+  ).toHaveCount(1);
+  await page.getByRole("button", { name: "結合を外す", exact: true }).click();
+  await ready(page);
+  await expect(
+    page.getByRole("columnheader").filter({ hasText: "個人分類" }),
+  ).toHaveCount(0);
+});
+
+test("personal join API denies unknown tables, duplicate keys, unpublished keys and sharing", async ({
+  request,
+}) => {
+  const source = (
+    await (await request.get("/api/catalog")).json()
+  ).sources.find((s: { name: string }) => s.name === "ORDERS");
+  const query = {
+    source: source.id,
+    detail: true,
+    dimensions: [],
+    metrics: [],
+    filters: [],
+    sort: [],
+    limit: 200,
+    offset: 0,
+    join: {
+      tableId: "duplicate-test",
+      sourceField: "PRODUCT",
+      tableField: "key",
+      type: "left",
+    },
+  };
+  const unknown = await request.post("/api/query", { data: { query } });
+  expect(unknown.status()).toBe(400);
+  const table = {
+    id: "duplicate-test",
+    name: "重複テスト",
+    columns: [{ id: "key", label: "キー", type: "TEXT" }],
+    rows: [["a"], ["a"]],
+  };
+  expect(
+    (
+      await request.post("/api/state", {
+        data: { kind: "personal", payload: table },
+      })
+    ).ok(),
+  ).toBe(true);
+  const duplicate = await request.post("/api/join-preview", {
+    data: { query },
+  });
+  expect(duplicate.status()).toBe(400);
+  expect((await duplicate.json()).error).toContain("重複");
+  await request.post("/api/state", {
+    data: { kind: "personal", payload: { ...table, rows: [["a"]] } },
+  });
+  expect(
+    (
+      await request.post("/api/state", {
+        data: { kind: "personal", payload: table },
+      })
+    ).status(),
+  ).toBe(400);
+  expect(
+    (
+      await request.post("/api/state", {
+        data: {
+          kind: "personal_delete",
+          payload: { id: table.id, version: 1 },
+        },
+      })
+    ).status(),
+  ).toBe(400);
+  const listed = (
+    await (await request.get("/api/state")).json()
+  ).personalTables.find((t: { id: string }) => t.id === table.id);
+  expect(listed.rows).toEqual([]);
+  expect(listed.rowCount).toBe(1);
+  const dataset = {
+    id: "join-scope",
+    name: "公開列の範囲",
+    description: "",
+    source: source.id,
+    fields: [
+      { id: "QUANTITY", label: "数量", description: "", recommended: true },
+    ],
+    defaultView: { ...query, join: undefined },
+    drill: {},
+  };
+  expect(
+    (
+      await request.post("/api/state", {
+        data: { kind: "dataset", payload: dataset },
+      })
+    ).ok(),
+  ).toBe(true);
+  expect(
+    (
+      await request.post("/api/query", {
+        data: { query, datasetId: dataset.id },
+      })
+    ).status(),
+  ).toBe(400);
+  expect(
+    (
+      await request.post("/api/state", {
+        data: { kind: "dataset", payload: { ...dataset, defaultView: query } },
+      })
+    ).status(),
+  ).toBe(400);
+  expect(
+    (
+      await request.post("/api/state", {
+        data: {
+          kind: "personal_delete",
+          payload: { id: table.id, version: 2 },
+        },
+      })
+    ).ok(),
+  ).toBe(true);
+  expect((await request.post("/api/query", { data: { query } })).status()).toBe(
+    400,
+  );
+});
+
+test("node table join checks row growth, joins lookup and saves private field definitions", async ({
+  page,
+}) => {
+  await page.setViewportSize({ width: 1280, height: 900 });
+  await page.goto("/");
+  await page.getByRole("button", { name: /DATASET 受注実績/ }).click();
+  await ready(page);
+  await page
+    .getByRole("button", { name: "テーブル同士を結合", exact: true })
+    .click();
+  const dialog = page.getByRole("dialog", { name: "テーブル同士を結合" });
+  await dialog.getByRole("button", { name: /CHEM.MASTER.PRODUCTS/ }).click();
+  await expect(
+    dialog.getByLabel("元データのキー 製品", { exact: true }),
+  ).toHaveAttribute("aria-pressed", "true");
+  await dialog.getByRole("button", { name: "結合を確認", exact: true }).click();
+  await expect(dialog.getByRole("status")).toContainText("結合後 12,000行");
+  await page.screenshot({ path: "artifacts/table-join-nodes.png" });
+  await dialog.getByRole("button", { name: "この結合で見る" }).click();
+  await ready(page);
+  await page.getByRole("button", { name: "＋ 行の項目を追加" }).click();
+  await pick(page, "行の項目を選ぶ", "PRODUCTS · 製品分類");
+  await ready(page);
+  await expect(
+    page.getByRole("cell", { name: "樹脂", exact: true }),
+  ).toHaveCount(2);
+  await page
+    .getByRole("button", { name: "自分用の項目名", exact: true })
+    .click();
+  const editor = page.getByRole("dialog", { name: "個人用の項目名を編集" });
+  await editor
+    .getByLabel("PRODUCTの個人表示名", { exact: true })
+    .fill("自分の製品名");
+  await editor
+    .getByLabel("PRODUCTの個人説明", { exact: true })
+    .fill("営業向けの個人説明");
+  await editor.getByRole("button", { name: "この分析に反映" }).click();
+  await expect(
+    page.getByRole("columnheader").filter({ hasText: "自分の製品名" }),
+  ).toBeVisible();
+  await page.getByRole("button", { name: "☆ 表示を保存" }).click();
+  await page.getByLabel("保存する表示名").fill("製品ノード分析 E2E");
+  await page
+    .getByRole("dialog", { name: "表示を保存" })
+    .getByRole("button", { name: "保存する", exact: true })
+    .click();
+  await expect(page.getByRole("dialog", { name: "表示を保存" })).toHaveCount(0);
+  await page.getByRole("button", { name: "データを探す", exact: true }).click();
+  await page.getByRole("button", { name: /製品ノード分析 E2E/ }).click();
+  await ready(page);
+  await expect(
+    page.getByRole("columnheader").filter({ hasText: "自分の製品名" }),
+  ).toBeVisible();
+  await page
+    .getByRole("button", { name: "Semantic Viewの下書き", exact: true })
+    .click();
+  const publication = page.getByRole("dialog", {
+    name: "セマンティックビューの公開下書き",
+  });
+  await publication
+    .getByRole("button", { name: "公開SQLを作る", exact: true })
+    .click();
+  await expect(
+    publication.getByLabel("公開SQL", { exact: true }),
+  ).toContainText("CREATE SEMANTIC VIEW");
+  await expect(
+    publication.getByLabel("公開SQL", { exact: true }),
+  ).toContainText("LEFT JOIN");
+  await expect(
+    publication.getByLabel("公開SQL", { exact: true }),
+  ).not.toContainText("自分の製品名");
+  const [download] = await Promise.all([
+    page.waitForEvent("download"),
+    publication
+      .getByRole("button", { name: "公開SQLを保存", exact: true })
+      .click(),
+  ]);
+  expect(download.suggestedFilename()).toBe("ORDERS_ANALYSIS.sql");
+  await publication
+    .getByRole("button", { name: "閉じる", exact: true })
+    .click();
+  await page.getByRole("button", { name: "結合を変更", exact: true }).click();
+  await dialog.getByText("結合先を選ぶ", { exact: false }).click();
+  await dialog
+    .getByRole("button", { name: /CHEM.PRODUCTION.PRODUCTION_LOG/ })
+    .click();
+  await dialog.getByLabel("元データのキー 製品", { exact: true }).click();
+  await dialog.getByLabel("結合先のキー 製品", { exact: true }).click();
+  await dialog.getByRole("button", { name: "結合を確認", exact: true }).click();
+  await expect(dialog.getByRole("status")).toContainText("結合後 24,000,000行");
+  await expect(dialog.getByText(/6種類のキーが重複/)).toBeVisible();
+  await expect(
+    dialog.getByRole("button", { name: "この結合で見る" }),
+  ).toBeDisabled();
+  await page.setViewportSize({ width: 390, height: 844 });
+  await expect(
+    dialog.getByRole("button", { name: "キャンセル", exact: true }),
+  ).toBeVisible();
+  await expect(
+    dialog.getByRole("button", { name: "この結合で見る" }),
+  ).toBeVisible();
+  await page.screenshot({ path: "artifacts/table-join-mobile.png" });
+});
+
+test("select visible columns, group measures together and save exact totals and subtotals", async ({
+  page,
+  request,
+}) => {
+  await page.setViewportSize({ width: 1280, height: 900 });
+  await page.goto("/");
+  await page.getByRole("button", { name: /ORDERS.*受注明細/ }).click();
+  await ready(page);
+  await page.getByLabel("製品の列を選択", { exact: true }).check();
+  await page.getByLabel("顧客の列を選択", { exact: true }).check();
+  await page.getByLabel("売上 円の列を選択", { exact: true }).check();
+  await expect(page.getByText("3列を選択中", { exact: true })).toBeVisible();
+  await page.screenshot({ path: "artifacts/columns-selected.png" });
+  await page.getByRole("button", { name: "選択列で集計", exact: true }).click();
+  await ready(page);
+  await expect(page.getByLabel("売上 円の集計方法")).toHaveValue("SUM");
+  const query = {
+    source: "CHEM.SALES.ORDERS",
+    dimensions: [],
+    metrics: [{ field: "SALES_AMOUNT", aggregation: "AVG" }],
+    filters: [],
+    sort: [],
+    detail: false,
+    limit: 1,
+    offset: 0,
+  };
+  const expected = await (
+    await request.post("/api/query", { data: { query } })
+  ).json();
+  await page.getByLabel("小計を表示").check();
+  await ready(page);
+  await expect(page.locator(".subtotal-row").first()).toBeVisible();
+  await expect(
+    page.locator(".subtotal-row").first().getByRole("button").first(),
+  ).toBeDisabled();
+  await page.getByLabel("売上 円の集計方法").selectOption("AVG");
+  await ready(page);
+  const total = page.getByRole("region", { name: "条件に合う全行の総計" });
+  await expect(total).toContainText(
+    expected.rows[0].SALES_AMOUNT__AVG.toLocaleString("ja-JP", {
+      maximumFractionDigits: 2,
+    }),
+  );
+  await page.screenshot({ path: "artifacts/grouped-subtotals.png" });
+  await page.getByRole("button", { name: "☆ 表示を保存" }).click();
+  await page.getByLabel("保存する表示名").fill("明細から一括集計 E2E");
+  await page
+    .getByRole("dialog", { name: "表示を保存" })
+    .getByRole("button", { name: "保存する", exact: true })
+    .click();
+  await expect(page.getByRole("dialog", { name: "表示を保存" })).toHaveCount(0);
+  await page.getByRole("button", { name: "データを探す", exact: true }).click();
+  await page.getByRole("button", { name: /明細から一括集計 E2E/ }).click();
+  await ready(page);
+  await expect(page.getByLabel("小計を表示")).toBeChecked();
+  await expect(page.getByLabel("売上 円の集計方法")).toHaveValue("AVG");
+  await expect(total).toContainText(
+    expected.rows[0].SALES_AMOUNT__AVG.toLocaleString("ja-JP", {
+      maximumFractionDigits: 2,
+    }),
+  );
+  await page.setViewportSize({ width: 390, height: 844 });
+  await expect(total).toBeVisible();
+  await page.screenshot({
+    path: "artifacts/grouped-totals-mobile.png",
+    fullPage: true,
+  });
+});
+
+test("drag visible detail columns into rows and values, reorder them and batch pick measures", async ({
+  page,
+}) => {
+  await page.goto("/");
+  await page.getByRole("button", { name: /ORDERS.*受注明細/ }).click();
+  await ready(page);
+  await page
+    .getByRole("button", { name: "製品で並べ替え", exact: true })
+    .dragTo(page.getByTestId("row-drop-zone"));
+  await ready(page);
+  await expect(
+    page.getByRole("columnheader").filter({ hasText: "売上 円" }),
+  ).toBeVisible();
+  await page
+    .getByRole("button", { name: "顧客で並べ替え", exact: true })
+    .dragTo(page.getByTestId("row-drop-zone"));
+  await ready(page);
+  await page
+    .getByRole("button", { name: "売上 円で並べ替え", exact: true })
+    .dragTo(page.getByTestId("value-drop-zone"));
+  await ready(page);
+  await expect(page.getByLabel("売上 円の集計方法")).toHaveValue("SUM");
+  await page
+    .getByRole("button", { name: "顧客を行で上へ", exact: true })
+    .click();
+  await ready(page);
+  await page
+    .getByRole("button", { name: "この項目で集計", exact: true })
+    .click();
+  await ready(page);
+  await expect(page.getByRole("columnheader").first()).toContainText("顧客");
+  await expect(page.getByRole("columnheader").nth(1)).toContainText("製品");
+  await page.getByRole("button", { name: "＋ 値を追加", exact: true }).click();
+  const picker = page.getByRole("dialog", { name: "集計する値を選ぶ" });
+  await picker.getByLabel("数量 kgを選択", { exact: true }).check();
+  await picker.getByLabel("温度 °Cを選択", { exact: true }).check();
+  await picker
+    .getByRole("button", { name: "選んだ2項目を追加", exact: true })
+    .click();
+  await ready(page);
+  await expect(page.getByLabel("数量 kgの集計方法")).toHaveValue("SUM");
+  await expect(page.getByLabel("温度 °Cの集計方法")).toHaveValue("SUM");
+  await page.getByRole("button", { name: "← 元に戻る", exact: true }).click();
+  await ready(page);
+  await expect(page.getByLabel("数量 kgの集計方法")).toHaveCount(0);
+  await expect(page.getByLabel("温度 °Cの集計方法")).toHaveCount(0);
+});
+
+test("live-mode UI rechecks repeated queries and removes previous results after access denial", async ({
+  page,
+}) => {
+  await page.route("**/api/catalog", async (route) => {
+    const response = await route.fetch();
+    const data = await response.json();
+    await route.fulfill({ response, json: { ...data, mode: "snowflake" } });
+  });
+  let queries = 0;
+  await page.route("**/api/query", async (route) => {
+    queries++;
+    if (queries === 3)
+      await route.fulfill({
+        status: 403,
+        json: { error: "現在の権限でこのデータを閲覧できません。" },
+      });
+    else await route.continue();
+  });
+  await page.goto("/");
+  await page.getByRole("button", { name: /DATASET 受注実績/ }).click();
+  await ready(page);
+  await page.getByLabel("売上 円の集計方法").selectOption("AVG");
+  await ready(page);
+  await page.getByLabel("売上 円の集計方法").selectOption("SUM");
+  await expect(page.locator(".error-banner")).toContainText("現在の権限");
+  await expect(page.getByRole("table", { name: "検索結果" })).toHaveCount(0);
+  await expect(
+    page.getByRole("region", { name: "条件に合う全行の総計" }),
+  ).toHaveCount(0);
+  expect(queries).toBe(3);
+});
