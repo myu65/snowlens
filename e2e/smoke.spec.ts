@@ -27,7 +27,9 @@ test("Excel and CSV exports preserve conditions, personal headers, typed tables 
   await fields
     .getByLabel("PRODUCTの個人表示名", { exact: true })
     .fill("分析用の製品名");
-  await fields.getByRole("button", { name: "この分析に反映", exact: true }).click();
+  await fields
+    .getByRole("button", { name: "この分析に反映", exact: true })
+    .click();
   await page.getByRole("button", { name: "＋ 条件", exact: true }).click();
   await pick(page, "検索条件の項目を選ぶ", "ORDER_DATE");
   await page.getByLabel("条件1の比較").selectOption("gte");
