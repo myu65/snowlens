@@ -1,0 +1,29 @@
+version: 2
+name: SNOWLENS
+database: SNOWFLAKE_APPS
+schema: APP
+query_warehouse: COMPUTE_WH
+label: SnowLens
+description: Fast table-first Snowflake data exploration
+auto_suspend_secs: 300
+ignore:
+  - node_modules
+  - .next
+  - .git
+  - .env*
+  - .snowlens-mock.json
+  - test-results
+  - playwright-report
+environment_variables:
+  - name: SNOWLENS_MODE
+    value: snowflake
+  - name: SNOWLENS_METADATA_DATABASE
+    value: SNOWFLAKE_APPS
+install:
+  commands:
+    - [npm, ci]
+build:
+  commands:
+    - [npm, run, build]
+run:
+  command: [npm, start]
