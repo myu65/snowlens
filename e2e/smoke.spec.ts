@@ -313,3 +313,45 @@ test("editing an existing detail Dataset refreshes unpublished columns", async (
     page.getByRole("button", { name: "TEMPERATUREで並べ替え" }),
   ).toHaveCount(0);
 });
+
+test("filter candidates respect context and aggregate values lead to detail", async ({
+  page,
+}) => {
+  await page.goto("/");
+  await page.getByRole("button", { name: /DATASET 受注実績/ }).click();
+  await ready(page);
+  await page.getByRole("button", { name: "＋ 条件", exact: true }).click();
+  await pick(page, "検索条件の項目を選ぶ", "PRODUCT");
+  await page.getByRole("button", { name: "候補を取得", exact: true }).click();
+  await expect(
+    page.getByRole("status").filter({ hasText: "他の検索条件に合う候補" }),
+  ).toBeVisible();
+  const choices = await page
+    .locator("datalist option")
+    .evaluateAll((options) =>
+      options.map((option) => (option as HTMLOptionElement).value),
+    );
+  expect(choices).toContain("アクリル樹脂 A-100");
+  await page.getByLabel("条件1の値").fill("アクリル樹脂 A-100");
+  await ready(page);
+  const row = page
+    .getByRole("row")
+    .filter({
+      has: page.getByRole("button", {
+        name: "アクリル樹脂 A-100",
+        exact: true,
+      }),
+    })
+    .first();
+  await row.getByRole("cell").last().getByRole("button").click();
+  await expect(
+    page.getByRole("button", { name: "この値だけ見る", exact: true }),
+  ).toHaveCount(0);
+  await page
+    .getByRole("button", { name: "この数字の明細を見る", exact: true })
+    .click();
+  await ready(page);
+  await expect(page.getByText("明細を表示中", { exact: false })).toBeVisible();
+  await expect(page.getByLabel("条件1の値")).toHaveValue("アクリル樹脂 A-100");
+  await page.screenshot({ path: "artifacts/filter-candidates.png" });
+});
