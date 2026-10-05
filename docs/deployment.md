@@ -26,12 +26,16 @@ headers from an untrusted proxy. Runtime should strip/replace client-supplied
 context headers. User query execution never switches to owner rights.
 
 Live deployment has not been validated without a connected Snowflake account.
-Catalog discovery currently limits each SHOW category to 10,000 objects. Plan
-lazy database/schema discovery for large installations. Column publication in a
+Catalog browsing loads databases, schemas and each relation kind in 100-object
+pages. Browsing metadata is cached in memory for 15 seconds, scoped to a hash of
+the caller token plus current user/primary/secondary roles. Source resolution and
+data queries always recheck fresh caller metadata and Snowflake permissions. Column publication in a
 Dataset is not a permission grant; users may still open raw sources they can SELECT.
 CSV exports the current bounded page. Query cache lasts for the browser tab until
-refresh; refresh after policy or data changes. Semantic fact drill-through requires
-a separately accessible raw relation. These limits are visible in the UI/docs.
+refresh; refresh after policy or data changes. Semantic fact drill-through uses an owner-configured separately accessible raw
+relation, explicit dimension-to-column mappings and published detail columns.
+Unmapped conditions fail closed. Metric compatibility and required window
+dimensions use SHOW SEMANTIC DIMENSIONS ... FOR METRIC. These limits are visible in the UI/docs.
 
 Official references (checked 2026-10-05):
 

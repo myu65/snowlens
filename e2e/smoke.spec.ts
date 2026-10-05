@@ -355,3 +355,194 @@ test("filter candidates respect context and aggregate values lead to detail", as
   await expect(page.getByLabel("条件1の値")).toHaveValue("アクリル樹脂 A-100");
   await page.screenshot({ path: "artifacts/filter-candidates.png" });
 });
+
+test("lazy catalog browses database/schema and opens unloaded Datasets", async ({
+  page,
+}) => {
+  await page.route("**/api/catalog", (route) =>
+    route.fulfill({ json: { sources: [], mode: "snowflake" } }),
+  );
+  await page.goto("/");
+  await page
+    .getByRole("button", { name: "データベースを表示", exact: true })
+    .click();
+  await page.locator("summary").filter({ hasText: "CHEM" }).click();
+  await page
+    .getByRole("button", { name: "スキーマを表示", exact: true })
+    .click();
+  await page
+    .locator("summary")
+    .filter({ hasText: /^SALES$/ })
+    .click();
+  await page
+    .locator("summary:visible")
+    .filter({ hasText: /^TABLE$/ })
+    .click();
+  await page.getByRole("button", { name: "データを表示", exact: true }).click();
+  await page.getByRole("button", { name: /ORDERS.*受注明細/ }).click();
+  await ready(page);
+  await page.getByRole("button", { name: /SnowLens/ }).click();
+  await page.getByRole("button", { name: /DATASET 品質異常/ }).click();
+  await ready(page);
+  await page.screenshot({ path: "artifacts/lazy-catalog.png" });
+});
+
+test("semantic fact drill-through retains context, projects published fields and fails closed", async ({
+  page,
+  request,
+}) => {
+  const catalog = await (await request.get("/api/catalog")).json();
+  const source = catalog.sources.find(
+    (s: { kind: string }) => s.kind === "semantic_view",
+  );
+  const target = catalog.sources.find(
+    (s: { name: string }) => s.name === "ORDERS",
+  );
+  const query = {
+    source: source.id,
+    dimensions: ["PRODUCT"],
+    metrics: [{ field: "SALES_AMOUNT", aggregation: "SEMANTIC" }],
+    filters: [],
+    sort: [],
+    detail: false,
+    limit: 200,
+    offset: 0,
+  };
+  const dataset = {
+    id: "semantic-facts-e2e",
+    name: "Semantic 明細 E2E",
+    description: "",
+    source: source.id,
+    fields: source.fields.map((f: { id: string; label: string }) => ({
+      id: f.id,
+      label: f.label,
+      description: "",
+      recommended: true,
+    })),
+    defaultView: query,
+    drill: {},
+    factDetail: {
+      source: target.id,
+      fields: ["PRODUCT", "LOT_NO"],
+      mapping: { PRODUCT: "PRODUCT", REGION: "REGION" },
+    },
+  };
+  const publish = await request.post("/api/state", {
+    data: { kind: "dataset", payload: dataset },
+  });
+  expect(publish.ok()).toBe(true);
+  await page.goto("/");
+  await page.getByRole("button", { name: /DATASET Semantic 明細 E2E/ }).click();
+  await ready(page);
+  const row = page
+    .getByRole("row")
+    .filter({
+      has: page.getByRole("button", {
+        name: "アクリル樹脂 A-100",
+        exact: true,
+      }),
+    })
+    .first();
+  await row.getByRole("cell").last().getByRole("button").click();
+  await page
+    .getByRole("button", { name: "この数字の明細を見る", exact: true })
+    .click();
+  const dialog = page.getByRole("dialog", { name: "元データの明細" });
+  await expect(dialog.getByRole("columnheader")).toHaveCount(2);
+  await expect(
+    dialog
+      .getByRole("cell")
+      .getByRole("button", { name: "アクリル樹脂 A-100", exact: true })
+      .first(),
+  ).toBeVisible();
+  await expect(
+    dialog.getByRole("button", { name: "次のページ", exact: true }),
+  ).toBeVisible();
+  await page.screenshot({ path: "artifacts/semantic-fact-detail.png" });
+  await dialog.getByRole("button", { name: "次のページ", exact: true }).click();
+  await expect(
+    dialog.getByRole("button", { name: "前のページ", exact: true }),
+  ).toBeEnabled();
+  await dialog
+    .getByRole("button", { name: "集計表に戻る", exact: true })
+    .click();
+  await expect(
+    page.getByRole("columnheader").filter({ hasText: "売上" }),
+  ).toBeVisible();
+  const bad = await request.post("/api/fact-detail", {
+    data: {
+      datasetId: dataset.id,
+      query: {
+        ...query,
+        filters: [{ field: "CUSTOMER", operator: "eq", value: "X" }],
+      },
+    },
+  });
+  expect(bad.status()).toBe(400);
+  const hidden = await request.post("/api/fact-detail", {
+    data: {
+      datasetId: dataset.id,
+      query: {
+        ...query,
+        filters: [{ field: "REGION", operator: "eq", value: "東日本" }],
+      },
+    },
+  });
+  expect(hidden.ok()).toBe(true);
+  const data = await hidden.json();
+  expect(data.result.columns).toEqual(["PRODUCT", "LOT_NO"]);
+  expect(data.source.fields.map((f: { id: string }) => f.id)).toEqual([
+    "PRODUCT",
+    "LOT_NO",
+  ]);
+  expect(Object.keys(data.result.rows[0])).toEqual(["PRODUCT", "LOT_NO"]);
+  expect(
+    (
+      await request.post("/api/state", {
+        data: {
+          kind: "dataset",
+          payload: {
+            ...dataset,
+            factDetail: { ...dataset.factDetail, fields: ["SECRET"] },
+          },
+        },
+      })
+    ).status(),
+  ).toBe(400);
+});
+
+test("semantic metric selection adds required dimensions from metadata", async ({
+  page,
+}) => {
+  await page.route("**/api/catalog?source=*&metric=*", async (route) => {
+    const response = await route.fetch();
+    const source = await response.json();
+    source.fields = source.fields.map((f: { id: string }) =>
+      f.id === "SALES_AMOUNT"
+        ? {
+            ...f,
+            compatibleDimensions: ["PRODUCT", "ORDER_DATE"],
+            requiredDimensions: ["ORDER_DATE"],
+          }
+        : f,
+    );
+    await route.fulfill({ json: source });
+  });
+  await page.goto("/");
+  await page
+    .getByRole("button", { name: /SALES_SEMANTIC.*意味定義済み/ })
+    .click();
+  await page
+    .getByRole("button", { name: "表示を組み立てる", exact: true })
+    .click();
+  await pick(page, "行の項目を選ぶ", "PRODUCT");
+  await page.getByRole("button", { name: "＋ 値を追加" }).click();
+  await pick(page, "集計する値を選ぶ", "SALES_AMOUNT");
+  await ready(page);
+  await expect(
+    page.getByRole("columnheader").filter({ hasText: "受注日" }),
+  ).toBeVisible();
+  await expect(
+    page.getByText(/指標に必要な行項目を追加しました/),
+  ).toBeVisible();
+});

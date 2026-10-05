@@ -16,7 +16,9 @@ import {
   operators,
 } from "@/lib/model";
 import { recommendedQuery } from "@/lib/mock";
+import FactDetail from "./components/fact-detail";
 import Grid from "./components/grid";
+import CatalogBrowser from "./components/catalog-browser";
 import FilterValue from "./components/filter-value";
 import FieldPicker from "./components/field-picker";
 import OwnerEditor from "./components/owner-editor";
@@ -86,6 +88,7 @@ export default function SnowLens() {
       row: Record<string, Value>;
       column: string;
     }>(),
+    [factQuery, setFactQuery] = useState<Query>(),
     [history, setHistory] = useState<Query[]>([]),
     [intro, setIntro] = useState(false),
     [retry, setRetry] = useState(0),
@@ -158,12 +161,17 @@ export default function SnowLens() {
       controller.abort();
     };
   }, [query, dataset?.id, retry]);
-  async function open(s: QueryableSource, d?: Dataset, saved?: SavedView) {
+  async function open(
+    s: Pick<QueryableSource, "id">,
+    d?: Dataset,
+    saved?: SavedView,
+  ) {
     const id = ++openId.current;
     setOpening(true);
     setError("");
     setNotice("");
     setCell(undefined);
+    setFactQuery(undefined);
     try {
       const full = await api<QueryableSource>(
         "/api/catalog?source=" + encodeURIComponent(s.id),
@@ -190,6 +198,7 @@ export default function SnowLens() {
     setSource(undefined);
     setQuery(undefined);
     setDataset(undefined);
+    setFactQuery(undefined);
     setError("");
     setNotice("");
     setOpening(false);
@@ -230,7 +239,8 @@ export default function SnowLens() {
         : "")
     );
   };
-  function choose(f: Field) {
+  async function choose(f: Field) {
+    const openIdAtSelection = openId.current;
     if (!query) return;
     setRecentFields((r) =>
       [f.id, ...r.filter((id) => id !== f.id)].slice(0, 12),
@@ -242,6 +252,58 @@ export default function SnowLens() {
         sort: [],
       });
     } else if (picker === "metric") {
+      if (f.semantic === "metric" && source) {
+        try {
+          const full = await api<QueryableSource>(
+            "/api/catalog?source=" +
+              encodeURIComponent(source.id) +
+              "&metric=" +
+              encodeURIComponent(f.id),
+          );
+          if (openId.current !== openIdAtSelection) return;
+          const metric = full.fields.find((x) => x.id === f.id)!;
+          setSource((current) => ({
+            ...full,
+            fields: full.fields.map((field) => ({
+              ...current?.fields.find((previous) => previous.id === field.id),
+              ...field,
+            })),
+          }));
+          if (
+            metric.compatibleDimensions &&
+            query.dimensions.some(
+              (id) => !metric.compatibleDimensions!.includes(id),
+            )
+          ) {
+            setNotice(
+              "この指標では現在の行項目を使えません。行項目を変更してください。",
+            );
+            return;
+          }
+          const required = metric.requiredDimensions || [];
+          if (required.some((id) => !fields.some((field) => field.id === id))) {
+            setNotice("この指標に必要な行項目がDatasetで公開されていません。");
+            return;
+          }
+          change({
+            detail: false,
+            dimensions: [...new Set([...query.dimensions, ...required])],
+            metrics: [
+              ...query.metrics.filter((m) => m.field !== f.id),
+              { field: f.id, aggregation: "SEMANTIC" },
+            ],
+            sort: [],
+          });
+          if (required.length)
+            setNotice(
+              "指標に必要な行項目を追加しました: " +
+                required.map(label).join("、"),
+            );
+        } catch {
+          setNotice("指標の組み合わせを確認できません。再度選択してください。");
+        }
+        return;
+      }
       const aggregation =
         f.semantic === "metric" ? "SEMANTIC" : isNumeric(f) ? "SUM" : "COUNT";
       change({
@@ -261,7 +323,13 @@ export default function SnowLens() {
           {
             field: f.id,
             operator: "eq",
-            value: isNumeric(f) ? 0 : /DATE/.test(f.type) ? "2026-10-01" : "",
+            value: isNumeric(f)
+              ? 0
+              : f.type === "BOOLEAN"
+                ? false
+                : /DATE/.test(f.type)
+                  ? "2026-10-01"
+                  : "",
           },
         ],
       });
@@ -408,9 +476,7 @@ export default function SnowLens() {
                     className="dataset-card"
                     onClick={() => {
                       const s = sources.find((s) => s.id === d.source);
-                      if (s) void open(s, d);
-                      else
-                        setError("このDatasetの元データにアクセスできません。");
+                      void open(s || { id: d.source }, d);
                     }}
                   >
                     <span className={"card-icon tone-" + (i % 3)}>
@@ -441,7 +507,7 @@ export default function SnowLens() {
                     onClick={() => {
                       const s = sources.find((s) => s.id === v.query.source),
                         d = state.datasets.find((d) => d.id === v.datasetId);
-                      if (s) void open(s, d, v);
+                      void open(s || { id: v.query.source }, d, v);
                     }}
                   >
                     ☆ {v.name}
@@ -459,6 +525,16 @@ export default function SnowLens() {
               <span>Datasetの登録なしで開けます</span>
             </div>
             <div className="browser-panel">
+              {mode === "snowflake" && (
+                <CatalogBrowser
+                  onOpen={(s) => {
+                    setSources((old) => [
+                      ...new Map([...old, s].map((x) => [x.id, x])).values(),
+                    ]);
+                    void open(s);
+                  }}
+                />
+              )}
               <div className="browser-tabs">
                 {[
                   ["all", "すべてのデータ"],
@@ -473,13 +549,29 @@ export default function SnowLens() {
                     {text}
                   </button>
                 ))}
-                <span>{filtered.length} sources</span>
+                <span>
+                  {filtered.length}{" "}
+                  {mode === "snowflake" ? "開いたデータ" : "sources"}
+                </span>
               </div>
+              {mode === "snowflake" && homeTab !== "all" && (
+                <div className="saved-list">
+                  {(homeTab === "favorite" ? state.favorites : state.recent)
+                    .filter((id) => !sources.some((s) => s.id === id))
+                    .map((id) => (
+                      <button key={id} onClick={() => void open({ id })}>
+                        {id}
+                      </button>
+                    ))}
+                </div>
+              )}
               {opening ? (
                 <div className="empty">データ一覧を読み込み中…</div>
               ) : !filtered.length ? (
                 <div className="empty">
-                  データが見つかりません。検索条件を変更してください。
+                  {mode === "snowflake"
+                    ? "上のデータベースからデータを開けます。検索は開いたデータが対象です。"
+                    : "データが見つかりません。検索条件を変更してください。"}
                 </div>
               ) : (
                 [...new Set(filtered.map((s) => s.database))].map((db) => (
@@ -1015,7 +1107,17 @@ export default function SnowLens() {
             )}
             <button
               onClick={() =>
-                change({ detail: true, filters: cellFilter(), sort: [] }, true)
+                dataset?.factDetail && source?.kind === "semantic_view"
+                  ? (setFactQuery({
+                      ...query,
+                      filters: cellFilter(),
+                      offset: 0,
+                    }),
+                    setCell(undefined))
+                  : change(
+                      { detail: true, filters: cellFilter(), sort: [] },
+                      true,
+                    )
               }
             >
               {query.metrics.some((m) => metricKey(m) === cell.column)
@@ -1076,9 +1178,17 @@ export default function SnowLens() {
           </section>
         </div>
       )}
+      {factQuery && dataset && (
+        <FactDetail
+          query={factQuery}
+          datasetId={dataset.id}
+          onClose={() => setFactQuery(undefined)}
+        />
+      )}
       {owner && source && query && (
         <OwnerEditor
           source={source}
+          sources={sources}
           query={query}
           existing={dataset}
           onClose={() => setOwner(false)}

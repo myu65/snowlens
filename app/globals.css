@@ -1076,3 +1076,18 @@ summary > span {
     font-size: 9px;
   }
 }
+
+.fact-detail {
+  display: flex;
+  flex-direction: column;
+  height: 80vh;
+  overflow: hidden;
+}
+.fact-detail .grid-scroll button:disabled {
+  opacity: 1;
+  color: inherit;
+  cursor: default;
+}
+.fact-detail .dialog-footer {
+  flex-shrink: 0;
+}

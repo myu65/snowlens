@@ -9,6 +9,7 @@ export default function Grid({
   onCell,
   sort,
   busy,
+  readOnly = false,
 }: {
   result: Result;
   label: (id: string) => string;
@@ -16,6 +17,7 @@ export default function Grid({
   onCell: (row: Record<string, Value>, column: string) => void;
   sort: Query["sort"];
   busy: boolean;
+  readOnly?: boolean;
 }) {
   const ref = useRef<HTMLDivElement>(null);
   // TanStack Virtual manages measurements outside React Compiler.
@@ -55,6 +57,7 @@ export default function Grid({
               }
             >
               <button
+                disabled={readOnly}
                 onClick={() => onSort(c)}
                 aria-label={`${label(c)}で並べ替え`}
               >
@@ -94,10 +97,12 @@ export default function Grid({
                 {result.columns.map((c) => (
                   <div role="cell" key={c}>
                     <button
-                      disabled={busy}
+                      disabled={busy || readOnly}
                       className={typeof row[c] === "number" ? "numeric" : ""}
                       onClick={() => onCell(row, c)}
-                      title="クリックして絞り込み・掘り下げ"
+                      title={
+                        readOnly ? undefined : "クリックして絞り込み・掘り下げ"
+                      }
                     >
                       {row[c] === null ? (
                         <span className="muted">—</span>
