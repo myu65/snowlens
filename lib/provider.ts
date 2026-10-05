@@ -1,9 +1,21 @@
+import { createHash } from "node:crypto";
+import {
+  CatalogCache,
+  catalogPage,
+  catalogRequest,
+  catalogCommands,
+  literal,
+  type CatalogRequest,
+  type CatalogPage,
+} from "./catalog";
 import { readFile, writeFile, rename } from "node:fs/promises";
 import {
   type AppState,
   type QueryableSource,
   type Result,
   type Value,
+  type Query,
+  type Dataset,
   validateDataset,
   savedSchema,
 } from "./model";
@@ -72,22 +84,52 @@ export async function withSnowflake<T>(
     await new Promise<void>((resolve) => connection.destroy(() => resolve()));
   }
 }
-export async function discover(): Promise<QueryableSource[]> {
-  if (mockMode()) return mockSources;
+const browsingCache = new CatalogCache();
+export async function browseCatalog(
+  input: CatalogRequest,
+): Promise<CatalogPage> {
+  const o = catalogRequest.parse(input);
+  if (mockMode()) {
+    const relevant = mockSources.filter(
+      (s) =>
+        (!o.database || s.database === o.database) &&
+        (!o.schema || s.schema === o.schema) &&
+        (!o.kind || s.kind === o.kind),
+    );
+    const names = [
+      ...new Set(
+        relevant.map((s) =>
+          o.kind ? s.name : o.database ? s.schema : s.database,
+        ),
+      ),
+    ]
+      .sort()
+      .filter((name) => !o.after || name > o.after)
+      .slice(0, 100);
+    return {
+      names,
+      sources: o.kind ? relevant.filter((s) => names.includes(s.name)) : [],
+      next: names.length === 100 ? names.at(-1) : undefined,
+    };
+  }
   return withSnowflake(async (exec) => {
-    const all: QueryableSource[] = [];
-    // SHOW returns only the caller-visible catalog. No persistent metadata mirror.
-    for (const [command, kind] of [
-      ["SHOW TABLES IN ACCOUNT LIMIT 10000", "table"],
-      ["SHOW VIEWS IN ACCOUNT LIMIT 10000", "view"],
-      ["SHOW DYNAMIC TABLES IN ACCOUNT LIMIT 10000", "dynamic_table"],
-      ["SHOW SEMANTIC VIEWS IN ACCOUNT LIMIT 10000", "semantic_view"],
-    ] as const) {
-      const rows = await exec(command);
-      all.push(...rows.map((r) => parseSource(r, kind)));
-    }
-    return [...new Map(all.map((s) => [s.id, s])).values()];
+    const context = await exec(
+      "SELECT CURRENT_USER() AS U, CURRENT_ROLE() AS R, CURRENT_SECONDARY_ROLES() AS S",
+    );
+    if (!context[0]?.U || !context[0]?.R)
+      throw Error("Caller context unavailable");
+    const h = await headers();
+    const token = h.get("Sf-Context-Current-User-Token");
+    if (!token) throw Error("Caller context unavailable");
+    const scope = createHash("sha256")
+      .update(JSON.stringify([token, context[0]]))
+      .digest("hex");
+    return browsingCache.get(scope, o, () => catalogPage(o, exec));
   });
+}
+export async function discover(): Promise<QueryableSource[]> {
+  // Live catalogs are navigated lazily by database/schema; mock keeps the demo overview.
+  return mockMode() ? mockSources : [];
 }
 export async function resolveSource(
   id: string,
@@ -99,17 +141,35 @@ export async function resolveSource(
     return s;
   }
   if (!exec) return withSnowflake((e) => resolveSource(id, e));
-  // Resolve requested object against caller catalog; browser names never reach SQL.
-  const sources: QueryableSource[] = [];
-  for (const [cmd, kind] of [
-    ["SHOW TABLES IN ACCOUNT LIMIT 10000", "table"],
-    ["SHOW VIEWS IN ACCOUNT LIMIT 10000", "view"],
-    ["SHOW DYNAMIC TABLES IN ACCOUNT LIMIT 10000", "dynamic_table"],
-    ["SHOW SEMANTIC VIEWS IN ACCOUNT LIMIT 10000", "semantic_view"],
-  ] as const) {
-    sources.push(...(await exec(cmd)).map((r) => parseSource(r, kind)));
+  // Only inspect the requested schema/name, always using fresh caller metadata.
+  let parts: unknown;
+  try {
+    parts = JSON.parse(id);
+  } catch {
+    throw Error("Source not accessible");
   }
-  const s = [...sources].reverse().find((s) => s.id === id);
+  if (
+    !Array.isArray(parts) ||
+    parts.length !== 3 ||
+    parts.some((p) => typeof p !== "string" || !p || p.length > 255)
+  )
+    throw Error("Source not accessible");
+  const [database, schema, name] = parts as string[];
+  const sources: QueryableSource[] = [];
+  for (const kind of [
+    "table",
+    "view",
+    "dynamic_table",
+    "semantic_view",
+  ] as const) {
+    const cmd = `${catalogCommands[kind]} LIKE ${literal(name)} IN SCHEMA ${[database, schema].map(identifier).join(".")} STARTS WITH ${literal(name)} LIMIT 100`;
+    sources.push(
+      ...(await exec(cmd))
+        .map((r) => parseSource(r, kind))
+        .filter((s) => s.id === id),
+    );
+  }
+  const s = sources.at(-1);
   if (!s) throw Error("Source not accessible");
   if (s.kind === "semantic_view") {
     const fields: QueryableSource["fields"] = [];
@@ -146,6 +206,168 @@ export async function resolveSource(
   if (!s.fields.length) throw Error("No accessible columns");
   return s;
 }
+export async function semanticConstraints(
+  s: QueryableSource,
+  metrics: string[],
+  exec: (sql: string, binds?: (string | number | boolean)[]) => Promise<Rows>,
+): Promise<QueryableSource> {
+  if (s.kind !== "semantic_view") return s;
+  const fields = s.fields.map((f) => ({ ...f }));
+  for (const id of [...new Set(metrics)]) {
+    const metric = fields.find((f) => f.id === id && f.semantic === "metric");
+    if (!metric) throw Error("Unknown field: " + id);
+    const name = (metric.expression || metric.id)
+      .split(".")
+      .map(identifier)
+      .join(".");
+    const rows = await exec(
+      `SHOW SEMANTIC DIMENSIONS IN ${relation(s)} FOR METRIC ${name}`,
+    );
+    const dimId = (r: Record<string, unknown>) =>
+      r.table_name
+        ? String(r.table_name) + "." + String(r.name)
+        : String(r.name);
+    metric.compatibleDimensions = rows.map(dimId);
+    metric.requiredDimensions = rows
+      .filter((r) => String(r.required).toLowerCase() === "true")
+      .map(dimId);
+  }
+  return { ...s, fields };
+}
+export async function resolveMetricSource(id: string, metric: string) {
+  if (mockMode()) return resolveSource(id);
+  return withSnowflake(async (exec) =>
+    semanticConstraints(await resolveSource(id, exec), [metric], exec),
+  );
+}
+function restrictSource(s: QueryableSource, fields: string[]) {
+  return { ...s, fields: s.fields.filter((f) => fields.includes(f.id)) };
+}
+export function validateFactMapping(
+  d: Dataset,
+  source: QueryableSource,
+  target: QueryableSource,
+) {
+  const detail = d.factDetail;
+  if (
+    !detail ||
+    source.kind !== "semantic_view" ||
+    target.kind === "semantic_view" ||
+    detail.source !== target.id
+  )
+    throw Error("Invalid fact detail source");
+  const published = new Set(d.fields.map((f) => f.id));
+  const targetIds = new Set(target.fields.map((f) => f.id));
+  if (
+    new Set(detail.fields).size !== detail.fields.length ||
+    detail.fields.some((id) => !targetIds.has(id))
+  )
+    throw Error("Invalid fact detail fields");
+  if (
+    !Object.keys(detail.mapping).length ||
+    Object.entries(detail.mapping).some(
+      ([from, to]) =>
+        !published.has(from) ||
+        source.fields.find((f) => f.id === from)?.semantic !== "dimension" ||
+        !targetIds.has(to),
+    )
+  )
+    throw Error("Invalid fact detail mapping");
+}
+export function factQuery(
+  q: Query,
+  d: Dataset,
+  s: QueryableSource,
+  target: QueryableSource,
+): Query {
+  validateFactMapping(d, s, target);
+  validateQuery(
+    q,
+    restrictSource(
+      s,
+      d.fields.map((f) => f.id),
+    ),
+  );
+  const detail = d.factDetail!;
+  const filters = q.filters.map((f) => {
+    const to = detail.mapping[f.field];
+    if (!to) throw Error("Invalid unmapped detail condition: " + f.field);
+    return { ...f, field: to };
+  });
+  const mapped = {
+    ...q,
+    source: target.id,
+    filters,
+    detail: true,
+    dimensions: [],
+    metrics: [],
+    sort: [],
+  };
+  // Filter fields may be hidden in detail output, but must still be valid target metadata.
+  validateQuery(mapped, target);
+  return mapped;
+}
+export async function runFactDetail(
+  input: unknown,
+  datasetId: string,
+  signal?: AbortSignal,
+) {
+  const q = (await import("./model")).querySchema.parse(input);
+  const run = async (
+    exec?: (
+      sql: string,
+      binds?: (string | number | boolean)[],
+    ) => Promise<Rows>,
+  ) => {
+    const state = await loadState(exec);
+    const d = state.datasets.find(
+      (d) => d.id === datasetId && d.source === q.source,
+    );
+    if (!d?.factDetail) throw Error("Dataset detail unavailable");
+    const source = await resolveSource(d.source, exec);
+    const target = await resolveSource(d.factDetail.source, exec);
+    const mapped = factQuery(q, d, source, target);
+    const exposed = restrictSource(target, d.factDetail.fields);
+    // Compile with all validated filter columns; project only owner-published detail fields.
+    const output = {
+      ...target,
+      fields: target.fields.filter(
+        (f) =>
+          d.factDetail!.fields.includes(f.id) ||
+          mapped.filters.some((x) => x.field === f.id),
+      ),
+    };
+    const compiled = compileQuery(mapped, output);
+    const started = performance.now();
+    const result = exec
+      ? {
+          rows: (await exec(compiled.sql, compiled.binds)).map((r) =>
+            Object.fromEntries(
+              compiled.columns.map((c) => [c, normalize(r[c])]),
+            ),
+          ),
+          columns: compiled.columns,
+          hasMore: false,
+          elapsedMs: Math.round(performance.now() - started),
+        }
+      : executeMock(mapped, output);
+    const hasMore = exec ? result.rows.length > q.limit : result.hasMore;
+    return {
+      source: exposed,
+      result: {
+        ...result,
+        hasMore,
+        columns: exposed.fields.map((f) => f.id),
+        rows: result.rows
+          .slice(0, q.limit)
+          .map((row) =>
+            Object.fromEntries(exposed.fields.map((f) => [f.id, row[f.id]])),
+          ),
+      },
+    };
+  };
+  return mockMode() ? run() : withSnowflake(run, signal);
+}
 export async function runQuery(
   input: unknown,
   datasetId?: string,
@@ -170,6 +392,12 @@ export async function runQuery(
         fields: s.fields.filter((f) => d.fields.some((df) => df.id === f.id)),
       };
     }
+    if (exec)
+      s = await semanticConstraints(
+        s,
+        parsed.detail ? [] : parsed.metrics.map((m) => m.field),
+        exec,
+      );
     const compiled = compileQuery(parsed, s);
     if (!exec) return executeMock(parsed, s);
     const start = performance.now();
@@ -277,6 +505,12 @@ export async function mutateState(action: StateAction): Promise<AppState> {
       const raw = (await import("./model")).datasetSchema.parse(payload);
       const s = await resolveSource(raw.source, exec);
       payload = validateDataset(raw, s);
+      if (raw.factDetail)
+        validateFactMapping(
+          raw,
+          s,
+          await resolveSource(raw.factDetail.source, exec),
+        );
       validateQuery(raw.defaultView, {
         ...s,
         fields: s.fields.filter((f) => raw.fields.some((df) => df.id === f.id)),

@@ -44,6 +44,21 @@ export function validateQuery(input: unknown, s: QueryableSource): Query {
       throw Error("Numeric field required");
     if (s.kind === "semantic_view" && f.semantic !== "metric")
       throw Error("Choose a defined semantic metric");
+    if (
+      f.compatibleDimensions &&
+      q.dimensions.some((id) => !f.compatibleDimensions!.includes(id))
+    )
+      throw Error("Invalid semantic dimensions for " + f.label);
+    if (
+      !q.detail &&
+      f.requiredDimensions?.some((id) => !q.dimensions.includes(id))
+    )
+      throw Error(
+        "Required semantic dimensions for " +
+          f.label +
+          ": " +
+          f.requiredDimensions.join(", "),
+      );
   });
   q.filters.forEach((filter) => {
     const f = get(filter.field);
@@ -51,6 +66,8 @@ export function validateQuery(input: unknown, s: QueryableSource): Query {
       throw Error("Filter a semantic dimension");
     if (!["is_null", "not_null"].includes(filter.operator)) {
       if (filter.value === null) throw Error("Use a null operator");
+      if (f.type === "BOOLEAN" && typeof filter.value !== "boolean")
+        throw Error("Invalid boolean filter");
       if (isNumeric(f) && typeof filter.value !== "number")
         throw Error("Numeric filter required");
       if (

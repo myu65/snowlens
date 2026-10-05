@@ -19,14 +19,17 @@ are needed. Mock saved metadata persists in `.snowlens-mock.json` (gitignored).
 
 ## What v0.1 does
 
-- Browse Table, View, Dynamic Table and Semantic View sources directly.
+- Browse Table, View, Dynamic Table and Semantic View sources directly. Live
+  catalogs load lazily by database/schema in 100-object pages.
 - Search fields by name/description, type, category, recommendation and recent use.
 - Choose row grouping (including numeric identifiers), field + aggregation values,
-  conditions and server-side sorting. Six ordinary aggregation functions are available.
+  conditions with contextual value candidates and server-side sorting. Six ordinary aggregation functions are available.
 - Click a cell to include/exclude, group, drill, inspect detail or copy; return with Undo.
 - Save raw or curated views, favorite sources, find recent items, and export a bounded CSV page.
 - Publish a Dataset without code: exposed fields, labels, descriptions, recommendations,
   current default query and drill candidates. Semantic metrics retain Snowflake definitions.
+  Owners can map a semantic Dataset to physical detail columns; every condition
+  must have an explicit mapping. Required metric dimensions use Snowflake metadata.
 - Keep previous results during updates; debounce/cancel obsolete requests; virtualize rows
   and field lists. Default page is 200 rows, maximum is 1,000.
 
@@ -47,3 +50,7 @@ npm run test:e2e
 See [architecture](docs/architecture.md), [development](docs/development.md)
 and [Snowflake deployment](docs/deployment.md). The [UX review](docs/ux-review.md)
 records tested flows, fixes and known limits. Licensed under MIT.
+
+For actual two-user policy/rights checks, see [live validation](docs/runtime-validation.md).
+`npm run test:live` requires local authenticated test-user states and direct-caller
+baselines; it cannot pass in mock mode.

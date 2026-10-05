@@ -1,14 +1,17 @@
 "use client";
 import { useState } from "react";
 import { type QueryableSource, type Query, type Dataset } from "@/lib/model";
+import FactMappingEditor from "./fact-mapping-editor";
 export default function OwnerEditor({
   source,
+  sources,
   query,
   existing,
   onPublish,
   onClose,
 }: {
   source: QueryableSource;
+  sources: QueryableSource[];
   query: Query;
   existing?: Dataset;
   onPublish: (d: Dataset) => Promise<void>;
@@ -42,6 +45,7 @@ export default function OwnerEditor({
         ]),
       ),
   );
+  const [factDetail, setFactDetail] = useState(existing?.factDetail);
   async function publish() {
     setBusy(true);
     setError("");
@@ -54,6 +58,7 @@ export default function OwnerEditor({
         fields,
         defaultView: query,
         drill,
+        ...(factDetail ? { factDetail } : {}),
       });
       onClose();
     } catch (e) {
@@ -234,6 +239,19 @@ export default function OwnerEditor({
           <p className="muted">
             行のグループ化を選ぶと掘り下げ候補も設定できます。
           </p>
+        )}
+        {source.kind === "semantic_view" && (
+          <FactMappingEditor
+            source={{
+              ...source,
+              fields: source.fields.filter((f) =>
+                fields.some((x) => x.id === f.id),
+              ),
+            }}
+            sources={sources}
+            value={factDetail}
+            onChange={setFactDetail}
+          />
         )}
         {error && (
           <p role="alert" className="error">

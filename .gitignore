@@ -10,3 +10,4 @@ test-results/
 .snowlens-mock.json
 .snowlens-e2e.json
 artifacts/
+playwright-auth/

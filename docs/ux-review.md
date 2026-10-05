@@ -54,12 +54,12 @@ requirements, CSV escaping and bounded request bodies.
 - No connected Snowflake account or Snowflake CLI was available for live deployment.
   Real caller grants, masking/row policies, semantic relationships and cancellation
   must be checked in an enabled account using the two-user deployment checklist.
-- Discovery is capped at 10,000 objects per SHOW category and is revalidated on each
-  query. Large accounts need lazy schema browsing and identity-scoped catalog caching.
+- Catalog browsing uses 100-object pages within a database/schema and a 15-second
+  caller/role-scoped cache. Source/query authorization is freshly checked.
 - CSV is the current bounded page, not an unbounded extract.
-- Semantic detail is dimension combinations. Physical fact drill-through needs an
-  explicitly mapped accessible raw relation; relationship/window-metric compatibility
-  currently returns Snowflake's query error rather than precomputing compatibility.
+- Semantic detail without a Dataset fact mapping shows dimension combinations.
+  Mapped physical detail and metric compatibility are implemented, but require
+  verification against a live Snowflake account.
 - Mock mode is one local user. Production state uses Snowflake storage and RBAC.
 - Offset pagination is not a consistent snapshot while data changes.
 - Modal focus trapping, URL/shareable query state, version conflicts and a more
@@ -67,3 +67,17 @@ requirements, CSV escaping and bounded request bodies.
 - `npm audit --omit=dev` has no production vulnerabilities. Full audit currently
   reports a braces issue inherited by the Next.js ESLint toolchain; no patched
   compatible dependency is available. Do not lint untrusted projects with this setup.
+
+## Datalizer-inspired follow-up
+
+- Filter candidates are loaded on demand, capped at 100, constrained by other
+  conditions and cancelled when stale. Direct input remains available.
+- Aggregate cells offer "この数字の明細を見る" and omit invalid equality actions.
+- Live catalog browsing expands database/schema/kind instead of scanning an account.
+- Semantic physical detail opens over the aggregate, with a fixed-height scrollable
+  grid and persistent close/pagination controls.
+- Primary references: [filter candidates](https://navi.wingarc.com/product/drsum/28389),
+  [hierarchical conditions](https://navi.wingarc.com/product/drsum/9396),
+  [drill preview](https://navi.wingarc.com/product/drsum/28385).
+- In-place hierarchy expansion and cross-tab layout remain later enhancements;
+  neither is claimed as implemented in this follow-up.

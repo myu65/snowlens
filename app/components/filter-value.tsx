@@ -22,6 +22,7 @@ export default function FilterValue({
   const [message, setMessage] = useState("");
   const [loadedContext, setLoadedContext] = useState("");
   const [requested, setRequested] = useState(false);
+  const boolean = field?.type === "BOOLEAN";
   const date = !!field && /DATE|TIME/.test(field.type);
   const context = JSON.stringify([
     query.source,
@@ -30,7 +31,7 @@ export default function FilterValue({
     filter.field,
   ]);
   useEffect(() => {
-    if (!requested || date) return;
+    if (!requested || date || boolean) return;
     const controller = new AbortController();
     const [source, filters, dataset, column] = JSON.parse(context);
     void fetch("/api/query", {
@@ -77,25 +78,36 @@ export default function FilterValue({
         }
       });
     return () => controller.abort();
-  }, [requested, context, date]);
+  }, [requested, context, date, boolean]);
   return (
     <div>
-      <input
-        aria-label={`条件${index + 1}の値`}
-        list={date ? undefined : id}
-        type={field && isNumeric(field) ? "number" : date ? "date" : "text"}
-        value={String(filter.value ?? "")}
-        onChange={(event) =>
-          onChange(
-            field && isNumeric(field)
-              ? Number(event.target.value)
-              : field?.type === "BOOLEAN"
-                ? event.target.value === "true"
-                : event.target.value,
-          )
-        }
-      />
-      {!date && (
+      {boolean ? (
+        <select
+          aria-label={`条件${index + 1}の値`}
+          value={String(filter.value)}
+          onChange={(e) => onChange(e.target.value === "true")}
+        >
+          <option value="true">true</option>
+          <option value="false">false</option>
+        </select>
+      ) : (
+        <input
+          aria-label={`条件${index + 1}の値`}
+          list={date ? undefined : id}
+          type={field && isNumeric(field) ? "number" : date ? "date" : "text"}
+          value={String(filter.value ?? "")}
+          onChange={(event) =>
+            onChange(
+              field && isNumeric(field)
+                ? Number(event.target.value)
+                : field?.type === "BOOLEAN"
+                  ? event.target.value === "true"
+                  : event.target.value,
+            )
+          }
+        />
+      )}
+      {!date && !boolean && (
         <>
           <datalist id={id}>
             {(loadedContext === context ? choices : []).map((value) => (

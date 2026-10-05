@@ -30,6 +30,8 @@ export type Field = {
   suggested: "dimension" | "metric";
   semantic?: "dimension" | "metric";
   expression?: string;
+  compatibleDimensions?: string[];
+  requiredDimensions?: string[];
 };
 export type QueryableSource = {
   id: string;
@@ -103,6 +105,14 @@ export const datasetSchema = z
       .max(500),
     defaultView: querySchema,
     drill: z.record(z.string(), z.array(z.string()).max(12)),
+    factDetail: z
+      .object({
+        source: z.string().min(1).max(1000),
+        fields: z.array(z.string().min(1)).min(1).max(500),
+        mapping: z.record(z.string(), z.string().min(1)),
+      })
+      .strict()
+      .optional(),
   })
   .strict();
 export type Dataset = z.infer<typeof datasetSchema>;
