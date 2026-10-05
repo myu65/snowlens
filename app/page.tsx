@@ -168,6 +168,7 @@ export default function SnowLens() {
         "/api/catalog?source=" + encodeURIComponent(s.id),
       );
       if (id !== openId.current) return;
+      window.scrollTo(0, 0);
       setSource(full);
       setDataset(d);
       setQuery(saved?.query || d?.defaultView || initialQuery(full));
@@ -183,6 +184,7 @@ export default function SnowLens() {
     }
   }
   function home() {
+    window.scrollTo(0, 0);
     openId.current++;
     setSource(undefined);
     setQuery(undefined);

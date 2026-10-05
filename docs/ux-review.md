@@ -27,6 +27,8 @@ Reviewed 2026-10-05 using the local production build, in-app browser and Playwri
 - Dataset recommendation edits now feed field selection. Dataset publication and
   personal saves have separate Snowflake table privileges.
 - Production startup uses ordinary Next.js output to match `npm start` in App Runtime.
+- Reset page scroll when opening a source or returning home so the result heading
+  and conditions stay visible after browsing a long source list.
 
 ## Validation scope
 
