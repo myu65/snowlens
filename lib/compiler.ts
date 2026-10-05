@@ -17,11 +17,11 @@ export function compileQuery(input:unknown,s:QueryableSource) {
  const q=validateQuery(input,s); const binds:(string|number|boolean)[]=[];
  const fields=new Map(s.fields.map(f=>[f.id,f])); const field=(id:string)=>identifier(fields.get(id)!.id);
  const sem=(id:string)=>{const f=fields.get(id)!; return (f.expression||f.id).split('.').map(identifier).join('.');};
- const filters=q.filters.map(f=>{const col=field(f.field); if(f.operator==='is_null')return col+' IS NULL';if(f.operator==='not_null')return col+' IS NOT NULL';if(f.operator==='contains'){binds.push(String(f.value).replaceAll('\\','\\\\').replaceAll('%','\\%').replaceAll('_','\\_'));return `${col} ILIKE '%' || ? || '%' ESCAPE '\\\\'`; } binds.push(f.value as string|number|boolean);return col+' '+({eq:'=',neq:'<>',gt:'>',gte:'>=',lt:'<',lte:'<='}[f.operator])+' ?';});
+ const filters=q.filters.map(f=>{const col=s.kind==='semantic_view'?sem(f.field):field(f.field); if(f.operator==='is_null')return col+' IS NULL';if(f.operator==='not_null')return col+' IS NOT NULL';if(f.operator==='contains'){binds.push(String(f.value).replaceAll('\\','\\\\').replaceAll('%','\\%').replaceAll('_','\\_'));return `${col} ILIKE '%' || ? || '%' ESCAPE '\\\\'`; } binds.push(f.value as string|number|boolean);return col+' '+({eq:'=',neq:'<>',gt:'>',gte:'>=',lt:'<',lte:'<='}[f.operator])+' ?';});
  let sql:string; let columns:string[];
  if(s.kind==='semantic_view') {
-   const dims=q.detail?s.fields.filter(f=>f.semantic==='dimension').map(f=>f.id):[...new Set([...q.dimensions,...q.filters.map(f=>f.field)])];
-   const clauses=[dims.length?'DIMENSIONS '+dims.map(sem).join(', '):'',!q.detail&&q.metrics.length?'METRICS '+q.metrics.map(m=>sem(m.field)).join(', '):''].filter(Boolean).join(' ');
+   const dims=q.detail?s.fields.filter(f=>f.semantic==='dimension').map(f=>f.id):q.dimensions;
+   const clauses=[dims.length?'DIMENSIONS '+dims.map(id=>sem(id)+' AS '+identifier(id)).join(', '):'',!q.detail&&q.metrics.length?'METRICS '+q.metrics.map(m=>sem(m.field)+' AS '+identifier(m.field)).join(', '):''].filter(Boolean).join(' ');
    columns=q.detail?dims:[...q.dimensions,...q.metrics.map(metricKey)];
    const selections=q.detail?dims.map(field):[...q.dimensions.map(field),...q.metrics.map(m=>`${field(m.field)} AS ${identifier(metricKey(m))}`)];
    // Extra filter dimensions must not change the requested grain: filter inside SEMANTIC_VIEW.
