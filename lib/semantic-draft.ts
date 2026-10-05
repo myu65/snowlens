@@ -2,7 +2,7 @@ import { identifier, relation, validateQuery } from "./compiler";
 import {
   relationFieldId,
   relationJoinedSource,
-  relationKey,
+  relationJoinCondition,
 } from "./relation-join";
 import type { Query, QueryableSource } from "./model";
 const literal = (value: string) =>
@@ -26,6 +26,10 @@ export function semanticDraft(
     );
   const join = q.join && "rightSource" in q.join ? q.join : undefined;
   if (join && !right) throw Error("結合先にアクセスできません。");
+  if (join?.leftFilters?.length || join?.rightFilters?.length)
+    throw Error(
+      "結合前の条件がある表示は公開できません。対象範囲を共有Viewで定義してから、そのViewを結合してください。",
+    );
   const source = join ? relationJoinedSource(left, right!, join) : left;
   validateQuery(q, source);
   if (q.detail || !q.metrics.length)
@@ -47,7 +51,7 @@ export function semanticDraft(
     .join(".");
   const viewName = target.map(identifier).join(".");
   const from = join
-    ? `${relation(left)} l ${join.type === "left" ? "LEFT" : "INNER"} JOIN ${relation(right!)} r ON ${relationKey(left, join.sourceField, "l")}=${relationKey(right!, join.rightField, "r")}`
+    ? `${relation(left)} l ${join.type === "left" ? "LEFT" : "INNER"} JOIN ${relation(right!)} r ON ${relationJoinCondition(left, right!, join)}`
     : `${relation(left)} l`;
   const facts = [...new Set(q.metrics.map((m) => m.field))];
   const blocks = [

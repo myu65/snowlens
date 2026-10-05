@@ -994,6 +994,148 @@ test("node table join checks row growth, joins lookup and saves private field de
   await page.screenshot({ path: "artifacts/table-join-mobile.png" });
 });
 
+test("Access-style composite keys and node conditions recheck counts, save recipes and export their scope", async ({
+  page,
+  request,
+}) => {
+  await page.setViewportSize({ width: 1280, height: 1000 });
+  await page.goto("/");
+  await page.getByRole("button", { name: /ORDERS.*受注明細/ }).click();
+  await ready(page);
+  await page
+    .getByRole("button", { name: "テーブル同士を結合", exact: true })
+    .click();
+  const dialog = page.getByRole("dialog", { name: "テーブル同士を結合" });
+  await dialog
+    .getByRole("button", { name: /CHEM.MASTER.PRODUCT_TARGETS/ })
+    .click();
+  await dialog
+    .getByRole("button", { name: "＋ キーを追加", exact: true })
+    .click();
+  await expect(
+    dialog.getByRole("button", { name: "結合を確認", exact: true }),
+  ).toBeDisabled();
+  await dialog.getByLabel("キー2の元データの項目").selectOption("MACHINE_ID");
+  await dialog.getByLabel("キー2の結合先の項目").selectOption("MACHINE_ID");
+  await dialog.getByRole("button", { name: "結合を確認", exact: true }).click();
+  const counts = dialog.getByRole("status", { name: "結合の確認結果" });
+  await expect(counts).toContainText("結合後 24,000行");
+  await expect(
+    dialog.getByText(/48種類のキーの組み合わせが重複/),
+  ).toBeVisible();
+  await expect(
+    dialog.getByRole("button", { name: "この結合で見る" }),
+  ).toBeDisabled();
+  await dialog.getByText("結合先の対象を絞る（任意）", { exact: true }).click();
+  await dialog
+    .getByRole("button", { name: "結合先の条件を追加", exact: true })
+    .click();
+  await dialog.getByLabel("結合先の条件1の項目").selectOption("YEAR");
+  await dialog.getByLabel("結合先の条件1の値").fill("2026");
+  await expect(counts).toHaveCount(0);
+  await dialog
+    .getByText("元データの対象を絞る（任意）", { exact: true })
+    .click();
+  await dialog
+    .getByRole("button", { name: "元データの条件を追加", exact: true })
+    .click();
+  await dialog.getByLabel("元データの条件1の比較").selectOption("gte");
+  await dialog.getByLabel("元データの条件1の値").fill("2026-10-01");
+  await dialog.getByRole("button", { name: "結合を確認", exact: true }).click();
+  await expect(counts).toContainText("元データ 10,285行");
+  await expect(counts).toContainText("結合先 48行");
+  await expect(counts).toContainText("結合後 10,285行");
+  await expect(
+    dialog.getByRole("button", { name: "この結合で見る" }),
+  ).toBeEnabled();
+  await dialog.locator(".dialog-body").evaluate((el) => {
+    el.scrollTop = 0;
+  });
+  await page.screenshot({ path: "artifacts/composite-join-desktop.png" });
+  await dialog.locator(".join-input-filters").scrollIntoViewIfNeeded();
+  await page.screenshot({ path: "artifacts/composite-join-conditions.png" });
+  await page.setViewportSize({ width: 390, height: 844 });
+  await dialog.locator(".join-key-pairs").scrollIntoViewIfNeeded();
+  await expect(
+    dialog.getByRole("button", { name: "この結合で見る" }),
+  ).toBeVisible();
+  await expect(dialog.getByLabel("キー2の結合先の項目")).toBeVisible();
+  expect(await dialog.evaluate((el) => el.scrollWidth <= el.clientWidth)).toBe(
+    true,
+  );
+  await page.screenshot({ path: "artifacts/composite-join-mobile.png" });
+  await dialog.getByRole("button", { name: "この結合で見る" }).click();
+  await ready(page);
+  await page.setViewportSize({ width: 1280, height: 1000 });
+  await expect(page.locator(".join-banner")).toContainText(
+    "設備番号 = 設備番号",
+  );
+  await page.getByRole("button", { name: "☆ 表示を保存" }).click();
+  await page.getByLabel("保存する表示名").fill("複合キーと年度 E2E");
+  await page
+    .getByRole("dialog", { name: "表示を保存" })
+    .getByRole("button", { name: "保存する", exact: true })
+    .click();
+  await expect(page.getByRole("dialog", { name: "表示を保存" })).toHaveCount(0);
+  await page.getByRole("button", { name: "データを探す", exact: true }).click();
+  await page.getByRole("button", { name: /複合キーと年度 E2E/ }).click();
+  await ready(page);
+  await page.getByRole("button", { name: "結合を変更", exact: true }).click();
+  await expect(dialog.getByLabel("キー1の元データの項目")).toHaveValue(
+    "PRODUCT",
+  );
+  await expect(dialog.getByLabel("キー2の元データの項目")).toHaveValue(
+    "MACHINE_ID",
+  );
+  await expect(dialog.getByLabel("結合先の条件1の値")).toHaveValue("2026");
+  await expect(dialog.getByLabel("元データの条件1の値")).toHaveValue(
+    "2026-10-01",
+  );
+  await dialog.getByRole("button", { name: "結合を確認", exact: true }).click();
+  await expect(counts).toContainText("結合後 10,285行");
+  await dialog.getByLabel("結合先の条件1の値").fill("2025");
+  await expect(counts).toHaveCount(0);
+  await expect(
+    dialog.getByRole("button", { name: "この結合で見る" }),
+  ).toBeDisabled();
+  await dialog.getByRole("button", { name: "キャンセル", exact: true }).click();
+  const state = await (await request.get("/api/state")).json();
+  const saved = state.saved.find(
+    (s: { name: string }) => s.name === "複合キーと年度 E2E",
+  );
+  expect(saved.query.join.keys).toHaveLength(2);
+  expect(saved.query.join.rightFilters[0].value).toBe(2026);
+  const exported = await request.post("/api/export", {
+    data: { query: saved.query, format: "xlsx" },
+  });
+  expect(exported.status()).toBe(200);
+  const workbook = new ExcelJS.Workbook();
+  await workbook.xlsx.load((await exported.body()) as never);
+  const report = JSON.stringify(
+    workbook.getWorksheet("表示")!.getSheetValues(),
+  );
+  expect(report).toContain("設備番号 ＝ 設備番号");
+  expect(report).toContain("年度 等しい 2026");
+  expect(report).toContain("受注日 以上 2026-10-01");
+  await page
+    .getByRole("button", { name: "Semantic Viewの下書き", exact: true })
+    .click();
+  const publication = page.getByRole("dialog", {
+    name: "セマンティックビューの公開下書き",
+  });
+  await expect(
+    publication.getByRole("button", { name: "公開SQLを作る", exact: true }),
+  ).toBeDisabled();
+  await expect(publication.getByText(/対象範囲を共有Viewで定義/)).toBeVisible();
+  expect(
+    (
+      await request.post("/api/semantic-draft", {
+        data: { query: saved.query, target: ["DB", "S", "V"] },
+      })
+    ).status(),
+  ).toBe(400);
+});
+
 test("select visible columns, group measures together and save exact totals and subtotals", async ({
   page,
   request,

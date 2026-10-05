@@ -1,10 +1,12 @@
 import {
   metricKey,
   type Field,
+  type Filter,
   type Query,
   type QueryableSource,
   type Result,
 } from "./model";
+import { relationJoinKeys } from "./relation-join";
 
 export type ExportContext = {
   query: Query;
@@ -13,6 +15,7 @@ export type ExportContext = {
   datasetName?: string;
   joinName?: string;
   joinVersion?: number;
+  joinSource?: QueryableSource;
   exportedAt: Date;
 };
 export type ExportColumn = {
@@ -100,9 +103,9 @@ export function exportScope(context: ExportContext) {
   return `現在のページ ${range}${result.hasMore ? "（次のページあり）" : ""}。データ${exportDataRows(context).length}行${result.rowLevels ? "。小計を含む画面の行番号" : ""}。`;
 }
 
-export function exportConditions(context: ExportContext) {
+export function formatConditions(filters: Filter[], source: QueryableSource) {
   const name = (id: string) =>
-    context.source.fields.find((f) => f.id === id)?.label || id;
+    source.fields.find((f) => f.id === id)?.label || id;
   const ops: Record<Query["filters"][number]["operator"], string> = {
     eq: "等しい",
     neq: "以外",
@@ -114,8 +117,23 @@ export function exportConditions(context: ExportContext) {
     is_null: "空欄",
     not_null: "空欄でない",
   };
-  return context.query.filters.map(
+  return filters.map(
     (f) =>
       `${name(f.field)} ${ops[f.operator]}${f.operator === "is_null" || f.operator === "not_null" ? "" : ` ${f.value === null ? "空欄" : String(f.value)}`}`,
   );
+}
+export function exportConditions(context: ExportContext) {
+  return formatConditions(context.query.filters, context.source);
+}
+export function exportJoinKeys(context: ExportContext) {
+  const join = context.query.join;
+  if (!join) return [];
+  const name = (id: string, source?: QueryableSource) =>
+    source?.fields.find((f) => f.id === id)?.label || id;
+  return "tableField" in join
+    ? [`${name(join.sourceField, context.source)} ＝ ${join.tableField}`]
+    : relationJoinKeys(join).map(
+        (key) =>
+          `${name(key.sourceField, context.source)} ＝ ${name(key.rightField, context.joinSource)}`,
+      );
 }

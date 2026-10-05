@@ -1,9 +1,21 @@
 "use client";
 import { useEffect, useRef, useState } from "react";
-import type { Query, QueryableSource, RelationJoin } from "@/lib/model";
-import { relationJoinedSource, type JoinCounts } from "@/lib/relation-join";
+import {
+  maxJoinKeys,
+  type Filter,
+  type Query,
+  type QueryableSource,
+  type RelationJoin,
+  type RelationKeyPair,
+} from "@/lib/model";
+import {
+  relationJoinKeys,
+  relationJoinedSource,
+  type JoinCounts,
+} from "@/lib/relation-join";
 import JoinDiagram from "./join-diagram";
 import CatalogBrowser from "./catalog-browser";
+import JoinSourceFilters from "./join-source-filters";
 
 export function queryForRelationJoin(
   query: Query,
@@ -47,11 +59,22 @@ export default function TableJoinBuilder({
   const current =
     query.join && "rightSource" in query.join ? query.join : undefined;
   const [right, setRight] = useState(initialRight);
-  const [sourceField, setSourceField] = useState(
-    current?.sourceField || source.fields[0]?.id || "",
+  const [keys, setKeys] = useState<RelationKeyPair[]>(
+    current
+      ? relationJoinKeys(current)
+      : [
+          {
+            sourceField: source.fields[0]?.id || "",
+            rightField: initialRight?.fields[0]?.id || "",
+          },
+        ],
   );
-  const [rightField, setRightField] = useState(
-    current?.rightField || initialRight?.fields[0]?.id || "",
+  const [activeKey, setActiveKey] = useState(0);
+  const [leftFilters, setLeftFilters] = useState<Filter[]>(
+    current?.leftFilters || [],
+  );
+  const [rightFilters, setRightFilters] = useState<Filter[]>(
+    current?.rightFilters || [],
   );
   const [type, setType] = useState<RelationJoin["type"]>(
     current?.type || "left",
@@ -64,11 +87,23 @@ export default function TableJoinBuilder({
   useEffect(() => () => abort.current?.abort(), []);
   const join: RelationJoin = {
     rightSource: right?.id || "",
-    sourceField,
-    rightField,
+    keys,
     type,
+    ...(leftFilters.length ? { leftFilters } : {}),
+    ...(rightFilters.length ? { rightFilters } : {}),
   };
   const signature = JSON.stringify(join);
+  function invalidate() {
+    abort.current?.abort();
+    setBusy(false);
+    setLoading(false);
+    setPreview(undefined);
+    setError("");
+  }
+  function updateKeys(next: RelationKeyPair[]) {
+    invalidate();
+    setKeys(next);
+  }
   async function select(s: QueryableSource) {
     abort.current?.abort();
     const controller = new AbortController();
@@ -84,14 +119,19 @@ export default function TableJoinBuilder({
       );
       const data = await res.json();
       if (!res.ok) throw Error(data.error);
+      if (controller.signal.aborted) return;
       setRight(data);
+      setRightFilters([]);
+      setActiveKey(0);
       const shared = source.fields.find((left) =>
         data.fields.some((f: { id: string }) => f.id === left.id),
       );
-      if (shared) {
-        setSourceField(shared.id);
-        setRightField(shared.id);
-      } else setRightField(data.fields[0]?.id || "");
+      setKeys([
+        {
+          sourceField: shared?.id || source.fields[0]?.id || "",
+          rightField: shared?.id || data.fields[0]?.id || "",
+        },
+      ]);
     } catch (e) {
       if (!controller.signal.aborted) setError((e as Error).message);
     } finally {
@@ -104,6 +144,7 @@ export default function TableJoinBuilder({
     const controller = new AbortController();
     abort.current = controller;
     setBusy(true);
+    setPreview(undefined);
     setError("");
     try {
       const next = queryForRelationJoin(query, source, right, join);
@@ -145,7 +186,7 @@ export default function TableJoinBuilder({
         </div>
         <div className="dialog-body">
           <p className="muted">
-            結合先を選び、キーと結合後の行数を確認します。
+            表ごとに対象を絞り、キーをつないで結合後の行数を確認します。
           </p>
           <details open={!right}>
             <summary>結合先を選ぶ {loading && "読み込み中…"}</summary>
@@ -178,26 +219,157 @@ export default function TableJoinBuilder({
               <JoinDiagram
                 left={source}
                 right={right}
-                leftKey={sourceField}
-                rightKey={rightField}
+                keys={keys}
+                activeKey={activeKey}
+                onActiveKey={setActiveKey}
                 onKeys={(l, r) => {
-                  setSourceField(l);
-                  setRightField(r);
+                  updateKeys(
+                    keys.map((key, i) =>
+                      i === activeKey ? { sourceField: l, rightField: r } : key,
+                    ),
+                  );
                 }}
                 leftRows={checked?.leftRows}
                 rightRows={checked?.rightRows}
               />
               <p className="muted">
-                ノード内の項目を選ぶと、結合するキーを変えられます。
+                キーを選んでからノード内の項目を押すと、そのキーを変えられます。
                 文字列のキーは、大文字・小文字・空白を区別します。
               </p>
+              <div className="join-key-pairs" aria-label="結合キーの組み合わせ">
+                {keys.map((key, i) => (
+                  <div
+                    className={`join-key-pair ${i === activeKey ? "active" : ""}`}
+                    key={i}
+                  >
+                    <button
+                      aria-label={`キー${i + 1}を編集`}
+                      aria-pressed={i === activeKey}
+                      onClick={() => setActiveKey(i)}
+                    >
+                      {i + 1}
+                    </button>
+                    <label>
+                      元データ
+                      <select
+                        aria-label={`キー${i + 1}の元データの項目`}
+                        value={key.sourceField}
+                        disabled={loading}
+                        onFocus={() => setActiveKey(i)}
+                        onChange={(e) =>
+                          updateKeys(
+                            keys.map((k, j) =>
+                              j === i
+                                ? { ...k, sourceField: e.target.value }
+                                : k,
+                            ),
+                          )
+                        }
+                      >
+                        <option value="">選んでください</option>
+                        {source.fields.map((f) => (
+                          <option
+                            key={f.id}
+                            value={f.id}
+                            disabled={keys.some(
+                              (k, j) => j !== i && k.sourceField === f.id,
+                            )}
+                          >
+                            {f.label}
+                          </option>
+                        ))}
+                      </select>
+                    </label>
+                    <span className="join-key-equals">＝</span>
+                    <label>
+                      結合先
+                      <select
+                        aria-label={`キー${i + 1}の結合先の項目`}
+                        value={key.rightField}
+                        disabled={loading}
+                        onFocus={() => setActiveKey(i)}
+                        onChange={(e) =>
+                          updateKeys(
+                            keys.map((k, j) =>
+                              j === i
+                                ? { ...k, rightField: e.target.value }
+                                : k,
+                            ),
+                          )
+                        }
+                      >
+                        <option value="">選んでください</option>
+                        {right.fields.map((f) => (
+                          <option
+                            key={f.id}
+                            value={f.id}
+                            disabled={keys.some(
+                              (k, j) => j !== i && k.rightField === f.id,
+                            )}
+                          >
+                            {f.label}
+                          </option>
+                        ))}
+                      </select>
+                    </label>
+                    <button
+                      aria-label={`キー${i + 1}を削除`}
+                      disabled={keys.length === 1 || loading}
+                      onClick={() => {
+                        updateKeys(keys.filter((_, j) => j !== i));
+                        setActiveKey(0);
+                      }}
+                    >
+                      ×
+                    </button>
+                  </div>
+                ))}
+                <button
+                  disabled={keys.length >= maxJoinKeys || loading}
+                  onClick={() => {
+                    updateKeys([...keys, { sourceField: "", rightField: "" }]);
+                    setActiveKey(keys.length);
+                  }}
+                >
+                  ＋ キーを追加
+                </button>
+                {keys.length > 1 && (
+                  <p className="muted">
+                    すべてのキーが一致する行を結合します。
+                  </p>
+                )}
+              </div>
+              <div className="join-input-filters">
+                <JoinSourceFilters
+                  source={source}
+                  side="元データ"
+                  filters={leftFilters}
+                  datasetId={datasetId}
+                  onChange={(next) => {
+                    invalidate();
+                    setLeftFilters(next);
+                  }}
+                />
+                <JoinSourceFilters
+                  source={right}
+                  side="結合先"
+                  filters={rightFilters}
+                  onChange={(next) => {
+                    invalidate();
+                    setRightFilters(next);
+                  }}
+                />
+              </div>
               <div className="join-types">
                 <label>
                   <input
                     type="radio"
                     name="table-join-type"
                     checked={type === "left"}
-                    onChange={() => setType("left")}
+                    onChange={() => {
+                      invalidate();
+                      setType("left");
+                    }}
                   />
                   元データをすべて残す
                 </label>
@@ -206,17 +378,31 @@ export default function TableJoinBuilder({
                     type="radio"
                     name="table-join-type"
                     checked={type === "inner"}
-                    onChange={() => setType("inner")}
+                    onChange={() => {
+                      invalidate();
+                      setType("inner");
+                    }}
                   />
                   一致する行だけ見る
                 </label>
               </div>
-              <button disabled={busy || loading} onClick={() => void check()}>
+              <button
+                disabled={
+                  busy ||
+                  loading ||
+                  keys.some((key) => !key.sourceField || !key.rightField)
+                }
+                onClick={() => void check()}
+              >
                 {busy ? "確認中…" : "結合を確認"}
               </button>
               {checked && (
                 <>
-                  <div className="join-stats" role="status">
+                  <div
+                    className="join-stats"
+                    role="status"
+                    aria-label="結合の確認結果"
+                  >
                     <span>元データ {checked.leftRows.toLocaleString()}行</span>
                     <span>結合先 {checked.rightRows.toLocaleString()}行</span>
                     <span>一致 {checked.matchedRows.toLocaleString()}行</span>
@@ -234,19 +420,19 @@ export default function TableJoinBuilder({
                   </div>
                   <p className={checked.duplicateKeys ? "error" : "muted"}>
                     {checked.duplicateKeys
-                      ? `結合先で${checked.duplicateKeys.toLocaleString()}種類のキーが重複しています。行数と集計値が増えるため、重複がないキーやViewを選んでください。`
-                      : "結合先のキーは重複していません。元データ1行に追加する行は最大1行です。"}
+                      ? `結合先で${checked.duplicateKeys.toLocaleString()}種類の${keys.length > 1 ? "キーの組み合わせ" : "キー"}が重複しています。行数と集計値が増えるため、キーを追加するか、結合先の対象を絞ってください。`
+                      : "結合先のキーの組み合わせは重複していません。元データ1行に追加する行は最大1行です。"}
                   </p>
                   {checked.nullKeys > 0 && (
                     <p className="muted">
-                      結合先の空欄キー {checked.nullKeys.toLocaleString()}
-                      行は一致しません。
+                      結合先でキーに空欄を含む
+                      {checked.nullKeys.toLocaleString()}行は一致しません。
                     </p>
                   )}
                 </>
               )}
               <p className="muted">
-                件数は検索条件を適用する前のデータで計算します。現在の権限と確認時点の値が対象です。
+                件数は各テーブルの対象条件を適用して計算します。結合後の検索条件は含みません。現在の権限と確認時点の値が対象です。
               </p>
             </>
           )}

@@ -42,7 +42,8 @@ import {
 import {
   compileRelationQuery,
   relationJoinedSource,
-  relationCountsSql,
+  relationFieldId,
+  compileRelationCounts,
   mockRelationCounts,
   joinRelationRows,
   type JoinCounts,
@@ -418,6 +419,7 @@ export async function runQueryWithContext(
     let datasetName: string | undefined;
     let joinName: string | undefined;
     let joinVersion: number | undefined;
+    let joinSource: QueryableSource | undefined;
     if (datasetId) {
       const state = await loadState(exec);
       const d = state.datasets.find(
@@ -452,6 +454,7 @@ export async function runQueryWithContext(
       const join = parsed.join;
       const right = await resolveSource(join.rightSource, exec);
       joinName = `${right.database}.${right.schema}.${right.name}`;
+      joinSource = right;
       output = relationJoinedSource(s, right, join);
       validateQuery(parsed, output);
       const counts = await relationCounts(s, right, join, exec);
@@ -482,6 +485,25 @@ export async function runQueryWithContext(
       ...output,
       fields: applyFieldOverrides(output.fields, overrides),
     };
+    if (joinSource) {
+      const right = joinSource;
+      const names = new Map(
+        overrides.map((override) => [override.id, override]),
+      );
+      joinSource = {
+        ...right,
+        fields: right.fields.map((field) => {
+          const override = names.get(relationFieldId(right, field.id));
+          return override
+            ? {
+                ...field,
+                label: override.label,
+                description: override.description,
+              }
+            : field;
+        }),
+      };
+    }
     const start = performance.now();
     const execute = async (q: Query): Promise<Result> => {
       const compiled = compile(q);
@@ -548,6 +570,7 @@ export async function runQueryWithContext(
       datasetName,
       joinName,
       joinVersion,
+      joinSource,
       exportedAt: new Date(),
     };
   };
@@ -889,9 +912,9 @@ async function relationCounts(
   join: RelationJoin,
   exec?: (sql: string, binds?: (string | number | boolean)[]) => Promise<Rows>,
 ): Promise<JoinCounts> {
-  const sql = relationCountsSql(left, right, join);
+  const compiled = compileRelationCounts(left, right, join);
   if (!exec) return mockRelationCounts(mockRows(left), mockRows(right), join);
-  const rows = await exec(sql);
+  const rows = await exec(compiled.sql, compiled.binds);
   const result = rows[0];
   const normalized = Object.fromEntries(
     Object.entries(result).map(([k, v]) => [k, Number(v)]),

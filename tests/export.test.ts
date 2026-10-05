@@ -7,6 +7,7 @@ import { exportColumns, type ExportContext } from "../lib/export-model";
 import { initialQuery } from "../lib/model";
 import { mockSources } from "../lib/mock";
 import { runQueryWithContext } from "../lib/provider";
+import { relationFieldId } from "../lib/relation-join";
 
 const source = mockSources[0];
 function sample(): ExportContext {
@@ -67,6 +68,56 @@ async function load(context: ExportContext) {
   return workbook;
 }
 afterEach(() => vi.unstubAllEnvs());
+
+it("exports every composite key and separates pre-join conditions from result conditions above the displayed data", async () => {
+  vi.stubEnv("SNOWLENS_MODE", "mock");
+  vi.stubEnv("SNOWLENS_MOCK_FILE", "artifacts/export-unit-missing.json");
+  const right = mockSources.find((s) => s.name === "PRODUCT_TARGETS")!;
+  const query = {
+    ...initialQuery(source),
+    limit: 2,
+    join: {
+      rightSource: right.id,
+      type: "left" as const,
+      keys: [
+        { sourceField: "PRODUCT", rightField: "PRODUCT" },
+        { sourceField: "MACHINE_ID", rightField: "MACHINE_ID" },
+      ],
+      leftFilters: [
+        { field: "ORDER_DATE", operator: "gte" as const, value: "2026-10-01" },
+      ],
+      rightFilters: [{ field: "YEAR", operator: "eq" as const, value: 2026 }],
+    },
+    filters: [{ field: "QUANTITY", operator: "gte" as const, value: 500 }],
+  };
+  const context = await runQueryWithContext(query, undefined, undefined, [
+    {
+      id: relationFieldId(right, "MACHINE_ID"),
+      label: "対象設備",
+      description: "個人の説明",
+    },
+    { id: relationFieldId(right, "YEAR"), label: "適用年度", description: "" },
+  ]);
+  const workbook = await load(context),
+    report = workbook.getWorksheet("表示")!;
+  const text = JSON.stringify(report.getSheetValues());
+  expect(text).toContain("製品 ＝ 製品");
+  expect(text).toContain("設備番号 ＝ 対象設備");
+  expect(text).toContain("受注日 以上 2026-10-01");
+  expect(text).toContain("適用年度 等しい 2026");
+  expect(text).toContain("元データの対象条件（結合前）");
+  expect(text).toContain("結合先の対象条件（結合前）");
+  expect(text).toContain("検索条件");
+  expect(text).toContain("数量 kg 以上 500");
+  const data = workbook.getWorksheet("データ")!;
+  expect(data.getTable("SnowLensData")).toBeDefined();
+  const target = relationFieldId(right, "TARGET");
+  expect(context.result.rows).toHaveLength(2);
+  expect(
+    context.result.rows.every((row) => typeof row[target] === "number"),
+  ).toBe(true);
+  expect(exportDataCsv(context)).not.toContain("結合前");
+});
 
 it("keeps scoped context above a readable report and a native data table, without reaggregating AVG or distinct totals", async () => {
   const context = sample(),

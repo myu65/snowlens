@@ -64,14 +64,51 @@ export const personalJoinSchema = z
   })
   .strict();
 export type PersonalJoin = z.infer<typeof personalJoinSchema>;
-export const relationJoinSchema = z
+const value = z.union([
+  z.string().max(2000),
+  z.number().finite(),
+  z.boolean(),
+  z.null(),
+]);
+export const filterSchema = z
   .object({
-    rightSource: z.string().min(1).max(1000),
-    sourceField: z.string().min(1).max(255),
-    rightField: z.string().min(1).max(255),
-    type: z.enum(["left", "inner"]),
+    field: z.string().min(1).max(255),
+    operator: z.enum(operators),
+    value,
   })
   .strict();
+export type Filter = z.infer<typeof filterSchema>;
+export const maxJoinKeys = 12;
+const relationJoinOptions = {
+  rightSource: z.string().min(1).max(1000),
+  type: z.enum(["left", "inner"]),
+  leftFilters: z.array(filterSchema).max(30).optional(),
+  rightFilters: z.array(filterSchema).max(30).optional(),
+};
+const relationKeyPairSchema = z
+  .object({
+    sourceField: z.string().min(1).max(255),
+    rightField: z.string().min(1).max(255),
+  })
+  .strict();
+export type RelationKeyPair = z.infer<typeof relationKeyPairSchema>;
+export const relationJoinSchema = z.union([
+  // Previously saved single-key definitions remain readable without migration.
+  z.object({ ...relationJoinOptions, ...relationKeyPairSchema.shape }).strict(),
+  z
+    .object({
+      ...relationJoinOptions,
+      keys: z.array(relationKeyPairSchema).min(1).max(maxJoinKeys),
+    })
+    .strict()
+    .refine(
+      (join) =>
+        new Set(join.keys.map((k) => k.sourceField)).size ===
+          join.keys.length &&
+        new Set(join.keys.map((k) => k.rightField)).size === join.keys.length,
+      "同じ項目を結合キーに重ねて選べません。",
+    ),
+]);
 export type RelationJoin = z.infer<typeof relationJoinSchema>;
 export type Field = {
   recommended?: boolean;
@@ -96,12 +133,6 @@ export type QueryableSource = {
   rowCount?: number;
   fields: Field[];
 };
-const value = z.union([
-  z.string().max(2000),
-  z.number().finite(),
-  z.boolean(),
-  z.null(),
-]);
 export const querySchema = z
   .object({
     source: z.string().min(1).max(1000),
@@ -113,13 +144,7 @@ export const querySchema = z
           .strict(),
       )
       .max(12),
-    filters: z
-      .array(
-        z
-          .object({ field: z.string(), operator: z.enum(operators), value })
-          .strict(),
-      )
-      .max(30),
+    filters: z.array(filterSchema).max(30),
     sort: z
       .array(
         z

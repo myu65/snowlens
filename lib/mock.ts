@@ -86,6 +86,35 @@ export const mockSources: QueryableSource[] = entries.map(
   }),
 );
 mockSources.push({
+  id: "CHEM.MASTER.PRODUCT_TARGETS",
+  database: "CHEM",
+  schema: "MASTER",
+  name: "PRODUCT_TARGETS",
+  kind: "table",
+  description: "製品・設備・年度ごとの目標値",
+  rowCount: 96,
+  fields: [
+    common.find((f) => f.id === "PRODUCT")!,
+    common.find((f) => f.id === "MACHINE_ID")!,
+    {
+      id: "YEAR",
+      label: "年度",
+      type: "NUMBER",
+      description: "目標の対象年度",
+      category: "目標",
+      suggested: "dimension",
+    },
+    {
+      id: "TARGET",
+      label: "目標 kg",
+      type: "NUMBER",
+      description: "製品・設備ごとの目標数量",
+      category: "目標",
+      suggested: "metric",
+    },
+  ],
+});
+mockSources.push({
   id: "CHEM.MASTER.PRODUCTS",
   database: "CHEM",
   schema: "MASTER",
@@ -114,6 +143,17 @@ const products = [
   "触媒 C-600",
 ];
 export function mockRows(s: QueryableSource): Record<string, Value>[] {
+  if (s.name === "PRODUCT_TARGETS")
+    return [2025, 2026].flatMap((year) =>
+      products.flatMap((product, i) =>
+        Array.from({ length: 8 }, (_, j) => ({
+          PRODUCT: product,
+          MACHINE_ID: j + 1,
+          YEAR: year,
+          TARGET: 100 + 10 * i + j,
+        })),
+      ),
+    );
   if (s.name === "PRODUCTS")
     return products.map((product, i) => ({
       PRODUCT: product,
@@ -239,20 +279,17 @@ export function defaultDatasets(): Dataset[] {
     ),
   ];
 }
-export function executeMock(
-  input: unknown,
-  s: QueryableSource,
-  data?: Record<string, Value>[],
-): Result {
-  const start = performance.now();
-  const q = validateQuery(input, s);
-  const rows = (data || mockRows(s)).filter((r) =>
-    q.filters.every((f) => {
+export function filterMockRows(
+  data: Record<string, Value>[],
+  filters: Query["filters"],
+) {
+  return data.filter((r) =>
+    filters.every((f) => {
       const v = r[f.field],
         t = f.value;
-      if (f.operator === "is_null") return v === null;
-      if (f.operator === "not_null") return v !== null;
-      if (v === null || t === null) return false;
+      if (f.operator === "is_null") return v == null;
+      if (f.operator === "not_null") return v != null;
+      if (v == null || t === null) return false;
       switch (f.operator) {
         case "eq":
           return v === t;
@@ -271,6 +308,15 @@ export function executeMock(
       }
     }),
   );
+}
+export function executeMock(
+  input: unknown,
+  s: QueryableSource,
+  data?: Record<string, Value>[],
+): Result {
+  const start = performance.now();
+  const q = validateQuery(input, s);
+  const rows = filterMockRows(data || mockRows(s), q.filters);
   const columns = q.detail
     ? s.fields.filter((f) => f.semantic !== "metric").map((f) => f.id)
     : [...q.dimensions, ...q.metrics.map(metricKey)];

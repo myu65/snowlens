@@ -1,20 +1,22 @@
 "use client";
 import { useState } from "react";
-import type { QueryableSource } from "@/lib/model";
+import type { QueryableSource, RelationKeyPair } from "@/lib/model";
 
 export default function JoinDiagram({
   left,
   right,
-  leftKey,
-  rightKey,
+  keys,
+  activeKey,
+  onActiveKey,
   onKeys,
   leftRows,
   rightRows,
 }: {
   left: QueryableSource;
   right: QueryableSource;
-  leftKey: string;
-  rightKey: string;
+  keys: RelationKeyPair[];
+  activeKey: number;
+  onActiveKey: (index: number) => void;
   onKeys: (left: string, right: string) => void;
   leftRows?: number;
   rightRows?: number;
@@ -24,8 +26,8 @@ export default function JoinDiagram({
     { x: 0, y: 0 },
   ]);
   const sources = [left, right],
-    keys = [leftKey, rightKey],
     rows = [leftRows, rightRows];
+  const active = keys[activeKey] || keys[0];
   return (
     <div className="join-canvas" aria-label="結合ノード">
       <svg
@@ -54,8 +56,17 @@ export default function JoinDiagram({
         />
       </svg>
       <span className="node-condition">
-        {left.fields.find((f) => f.id === leftKey)?.label} ={" "}
-        {right.fields.find((f) => f.id === rightKey)?.label}
+        {keys.map((key, i) => (
+          <span key={i}>
+            {i > 0 && <small>かつ</small>}
+            {i + 1}.{" "}
+            {left.fields.find((f) => f.id === key.sourceField)?.label ||
+              "未選択"}{" "}
+            ={" "}
+            {right.fields.find((f) => f.id === key.rightField)?.label ||
+              "未選択"}
+          </span>
+        ))}
       </span>
       {sources.map((source, i) => (
         <div
@@ -107,23 +118,34 @@ export default function JoinDiagram({
             </small>
           </div>
           <div className="node-fields">
-            {source.fields.map((field) => (
-              <button
-                key={field.id}
-                className={field.id === keys[i] ? "selected" : ""}
-                aria-pressed={field.id === keys[i]}
-                aria-label={`${i === 0 ? "元データ" : "結合先"}のキー ${field.label}`}
-                onClick={() =>
-                  onKeys(
-                    i === 0 ? field.id : leftKey,
-                    i === 1 ? field.id : rightKey,
-                  )
-                }
-              >
-                <span className="node-port" /> <span>{field.label}</span>
-                <small>{field.type}</small>
-              </button>
-            ))}
+            {source.fields.map((field) => {
+              const selected = keys.findIndex(
+                (key) =>
+                  field.id === (i === 0 ? key.sourceField : key.rightField),
+              );
+              return (
+                <button
+                  key={field.id}
+                  className={selected >= 0 ? "selected" : ""}
+                  aria-pressed={selected >= 0}
+                  aria-label={`${i === 0 ? "元データ" : "結合先"}のキー ${field.label}`}
+                  onClick={() =>
+                    selected >= 0
+                      ? onActiveKey(selected)
+                      : onKeys(
+                          i === 0 ? field.id : active.sourceField,
+                          i === 1 ? field.id : active.rightField,
+                        )
+                  }
+                >
+                  <span className="node-port" /> <span>{field.label}</span>
+                  {selected >= 0 && (
+                    <small className="node-key-number">{selected + 1}</small>
+                  )}
+                  <small>{field.type}</small>
+                </button>
+              );
+            })}
           </div>
         </div>
       ))}

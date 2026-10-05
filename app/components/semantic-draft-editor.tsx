@@ -26,6 +26,10 @@ export default function SemanticDraftEditor({
     target: string[];
     requires: string[];
   }>();
+  const hasInputFilters =
+    query.join &&
+    "rightSource" in query.join &&
+    !!(query.join.leftFilters?.length || query.join.rightFilters?.length);
   async function create() {
     setBusy(true);
     setError("");
@@ -126,11 +130,16 @@ export default function SemanticDraftEditor({
             セマンティックビューの閲覧権限だけで元データを読めるため、公開対象ロールとマスキング・行の制限を確認します。
           </p>
           <button
-            disabled={busy || target.some((v) => !v.trim())}
+            disabled={busy || hasInputFilters || target.some((v) => !v.trim())}
             onClick={() => void create()}
           >
             {busy ? "下書きを作成中…" : "公開SQLを作る"}
           </button>
+          {hasInputFilters && (
+            <p className="error">
+              結合前の条件がある表示は公開できません。対象範囲を共有Viewで定義してから、そのViewを結合してください。
+            </p>
+          )}
           {error && (
             <p role="alert" className="error">
               {error}
