@@ -104,8 +104,9 @@ Production-build Playwright journeys cover these interactions and 390px screens.
 Screenshots live under the ignored `artifacts/` folder. Unit checks also exercise
 identity-free storage write arguments, hostile bound private values, exact join
 count arithmetic, snapshot uniqueness checks, and invalid composed field sets.
-SQL procedure deployment, principal lifecycle and runtime policy behavior remain
-unverified in a live account; Issue #5 remains open.
+Direct SQL storage and principal checks now have separate live evidence. App
+Runtime tokens, two-user lifecycle and runtime policy checks remain outstanding;
+Issue #5 remains open. See the [connected-account record](snowflake-validation.md).
 
 Screenshots use synthetic mock data, not a connected account:
 
@@ -114,3 +115,29 @@ Screenshots use synthetic mock data, not a connected account:
 ![Subtotals and an exact grand average](images/grouped-subtotals.png)
 
 ![Check lookup nodes and row growth](images/table-join-nodes.png)
+
+## Composite keys and pre-join filters
+
+The two-node builder accepts 1–12 key pairs and optional filters on each input.
+All pairs must match. A synthetic yearly target table demonstrates that adding
+product + machine keys alone still leaves 48 duplicated tuples; selecting one
+year makes the lookup unique. A source date filter then reduces 12,000 orders to
+10,285 before joining. The preview uses the filtered inputs and excludes result
+filters. Editing a key or condition clears the preview and disables Apply.
+
+Private save/reopen retains both key pairs and both input conditions. Excel places
+each pair and each node's conditions above the report, separately from result
+filters; CSV stays data-only. Publication with private input conditions is blocked
+with a shared-View instruction. Existing one-key saved views remain compatible.
+
+The production-build journey covers these operations at 1280px and 390px. Mobile
+keys stack vertically and the node condition uses a full-width caption. Fixed
+footer controls remain visible. Direct Snowflake SQL and restricted-caller
+procedure tests verify counts, NULL handling, snapshot duplicate detection and
+rights revocation; they do not establish App Runtime safety.
+
+![Composite node keys](images/composite-join-desktop.png)
+
+![Independent input conditions](images/composite-join-conditions.png)
+
+![Stacked keys on a narrow screen](images/composite-join-mobile.png)

@@ -32,10 +32,12 @@ are needed. Mock saved metadata persists in `.snowlens-mock.json` (gitignored).
 - Create private typed tables from spreadsheet paste or manual input (1,000 rows,
   12 columns), then LEFT/INNER join them to caller-accessible sources.
 - Join Table/View/Dynamic Table nodes across schemas. Check exact caller-visible
-  row growth, unmatched keys and duplicates before applying a single-key lookup join.
+  row growth, unmatched keys and duplicates before applying a lookup join with
+  1–12 key pairs and optional per-node pre-join filters. Existing single-key views work.
 - Save personal field labels/descriptions along with filters, joins, grouping and totals.
 - Download a reviewable Semantic View SQL draft for a permitted publisher or admin.
-  The app does not execute publication DDL or grants.
+  Compound equalities are retained; private pre-join conditions require a shared View
+  before drafting publication. The app does not execute publication DDL or grants.
 - Click a cell to include/exclude, group, drill, inspect detail or copy; return with Undo.
 - Save raw or curated views, favorite sources and find recent items. Download bounded
   Excel reports with conditions and exact totals, plus a reusable native data table.

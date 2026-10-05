@@ -9,6 +9,7 @@ export default function FilterValue({
   index,
   datasetId,
   personalVersion,
+  labelPrefix = "条件",
   onChange,
 }: {
   field?: Field;
@@ -16,6 +17,7 @@ export default function FilterValue({
   index: number;
   datasetId?: string;
   personalVersion?: number;
+  labelPrefix?: string;
   onChange: (value: Value) => void;
 }) {
   const id = useId();
@@ -88,7 +90,7 @@ export default function FilterValue({
     <div>
       {boolean ? (
         <select
-          aria-label={`条件${index + 1}の値`}
+          aria-label={`${labelPrefix}${index + 1}の値`}
           value={String(filter.value)}
           onChange={(e) => onChange(e.target.value === "true")}
         >
@@ -97,7 +99,7 @@ export default function FilterValue({
         </select>
       ) : (
         <input
-          aria-label={`条件${index + 1}の値`}
+          aria-label={`${labelPrefix}${index + 1}の値`}
           list={date ? undefined : id}
           type={field && isNumeric(field) ? "number" : date ? "date" : "text"}
           value={String(filter.value ?? "")}

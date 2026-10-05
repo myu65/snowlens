@@ -4,6 +4,8 @@ import {
   aggregationNames,
   exportColumns,
   exportConditions,
+  exportJoinKeys,
+  formatConditions,
   exportDataRows,
   exportScope,
   exportTitle,
@@ -250,13 +252,32 @@ export async function exportExcel(context: ExportContext): Promise<Uint8Array> {
       `${context.joinName}${context.joinVersion ? `（個人テーブル・版${context.joinVersion}）` : ""}。${query.join?.type === "left" ? "元データをすべて残す" : "一致する行だけ"}`,
       count,
     );
-    row = metadata(
-      report,
-      row,
-      "結合キー",
-      `${label(query.join!.sourceField)} ＝ ${"tableField" in query.join! ? query.join!.tableField : query.join!.rightField}`,
-      count,
-    );
+    for (const key of exportJoinKeys(context))
+      row = metadata(report, row, "結合キー（すべて一致）", key, count);
+    if (query.join && "rightSource" in query.join) {
+      for (const condition of formatConditions(
+        query.join.leftFilters || [],
+        source,
+      ))
+        row = metadata(
+          report,
+          row,
+          "元データの対象条件（結合前）",
+          condition,
+          count,
+        );
+      for (const condition of formatConditions(
+        query.join.rightFilters || [],
+        context.joinSource || source,
+      ))
+        row = metadata(
+          report,
+          row,
+          "結合先の対象条件（結合前）",
+          condition,
+          count,
+        );
+    }
   }
   row = metadata(report, row, "表示", query.detail ? "明細" : "集計", count);
   if (!query.detail) {

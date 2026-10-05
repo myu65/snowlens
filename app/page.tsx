@@ -33,7 +33,7 @@ import {
 import { recommendedQuery } from "@/lib/mock";
 import SemanticDraftEditor from "./components/semantic-draft-editor";
 import TableJoinBuilder from "./components/table-join-builder";
-import { relationJoinedSource } from "@/lib/relation-join";
+import { relationJoinedSource, relationJoinKeys } from "@/lib/relation-join";
 import PersonalFieldsEditor from "./components/personal-fields-editor";
 import { applyFieldOverrides } from "@/lib/definitions";
 import PersonalTableEditor from "./components/personal-table-editor";
@@ -923,26 +923,31 @@ export default function SnowLens() {
                     ▦ {activeTable?.name || joinedRight?.name || "結合先"}
                   </strong>
                   <span>
-                    {label(query.join.sourceField)} ={" "}
                     {"tableField" in query.join
-                      ? activeTable?.columns.find(
-                          (c) =>
-                            c.id ===
-                            ("tableField" in query.join!
-                              ? query.join.tableField
-                              : ""),
-                        )?.label || query.join.tableField
-                      : joinedRight?.fields.find(
-                          (f) =>
-                            f.id ===
-                            ("rightField" in query.join!
-                              ? query.join.rightField
-                              : ""),
-                        )?.label || query.join.rightField}{" "}
+                      ? `${label(query.join.sourceField)} = ${
+                          activeTable?.columns.find(
+                            (c) =>
+                              c.id ===
+                              ("tableField" in query.join!
+                                ? query.join.tableField
+                                : ""),
+                          )?.label || query.join.tableField
+                        }`
+                      : relationJoinKeys(query.join)
+                          .map(
+                            (key) =>
+                              `${label(key.sourceField)} = ${joinedRight?.fields.find((f) => f.id === key.rightField)?.label || key.rightField}`,
+                          )
+                          .join("、かつ ")}{" "}
                     ·{" "}
                     {query.join.type === "left"
                       ? "元データをすべて残す"
                       : "一致する行だけ"}
+                    {"rightSource" in query.join &&
+                    (query.join.leftFilters?.length ||
+                      query.join.rightFilters?.length)
+                      ? ` · 結合前の条件 ${query.join.leftFilters?.length || 0}＋${query.join.rightFilters?.length || 0}件`
+                      : ""}
                   </span>
                   <button
                     onClick={() => {

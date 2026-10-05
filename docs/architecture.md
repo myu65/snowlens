@@ -34,12 +34,20 @@ semantic engine. Without a Dataset mapping, semantic detail shows dimension
 combinations. With an owner-configured factDetail mapping, a separate dialog
 queries a caller-accessible raw relation, carries every filter and cell row
 dimension across explicit column mappings, and returns only published detail
-columns. Missing mappings fail closed. Joins accept one validated equality key,
+columns. Missing mappings fail closed. General relation joins accept 1–12 validated equality pairs,
 server-resolved source metadata and LEFT/INNER mode. Arbitrary expressions and
 browser SQL are rejected. Private input is validated typed JSON, bound and expanded
 with FLATTEN. Right fields receive stable aliases; source Dataset scope is retained.
-Lookup keys must be unique. The general join verifies uniqueness within the same
+Each node has optional bound pre-join filters, compiled into a CTE under fresh
+caller rights. Result filters apply after joining. Private JSON inputs still use
+one key. Every component is compared directly; any NULL component cannot match.
+Lookup tuples must be unique. The general join verifies uniqueness within the same
 statement as the result, as well as in preview. String keys use exact UTF-8 equality.
+
+Private saved recipes persist the logical composition, not CTE SQL or result data.
+They do not materialize a View, schedule dbt builds or operate a shared model DAG.
+Publication drafts retain compound equality conditions and reject pre-join filters
+whose private values would otherwise be omitted or embedded into shared DDL.
 
 Every live request gets a separate OAuth session using the rotating service token
 plus trusted ingress caller token. Missing caller context fails closed. No owner

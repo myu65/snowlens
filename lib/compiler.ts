@@ -4,6 +4,7 @@ import {
   querySchema,
   metricKey,
   isNumeric,
+  type Filter,
 } from "./model";
 // Identifiers ONLY come from freshly resolved server metadata; unusual quoted names are supported.
 export function identifier(name: string): string {
@@ -106,22 +107,13 @@ export function validateQuery(input: unknown, s: QueryableSource): Query {
   });
   return q;
 }
-export function compileQuery(
-  input: unknown,
-  s: QueryableSource,
-  resolved?: { from: string; binds: (string | number | boolean)[] },
+export function compileFilterPredicates(
+  filters: Filter[],
+  column: (id: string) => string,
 ) {
-  const q = validateQuery(input, s);
-  if (q.join && !resolved) throw Error("Invalid unresolved personal join");
-  const binds: (string | number | boolean)[] = [...(resolved?.binds || [])];
-  const fields = new Map(s.fields.map((f) => [f.id, f]));
-  const field = (id: string) => identifier(fields.get(id)!.id);
-  const sem = (id: string) => {
-    const f = fields.get(id)!;
-    return (f.expression || f.id).split(".").map(identifier).join(".");
-  };
-  const filters = q.filters.map((f) => {
-    const col = s.kind === "semantic_view" ? sem(f.field) : field(f.field);
+  const binds: (string | number | boolean)[] = [];
+  const predicates = filters.map((f) => {
+    const col = column(f.field);
     if (f.operator === "is_null") return col + " IS NULL";
     if (f.operator === "not_null") return col + " IS NOT NULL";
     if (f.operator === "contains") {
@@ -143,6 +135,28 @@ export function compileQuery(
       " ?"
     );
   });
+  return { predicates, binds };
+}
+export function compileQuery(
+  input: unknown,
+  s: QueryableSource,
+  resolved?: { from: string; binds: (string | number | boolean)[] },
+) {
+  const q = validateQuery(input, s);
+  if (q.join && !resolved) throw Error("Invalid unresolved personal join");
+  const binds: (string | number | boolean)[] = [...(resolved?.binds || [])];
+  const fields = new Map(s.fields.map((f) => [f.id, f]));
+  const field = (id: string) => identifier(fields.get(id)!.id);
+  const sem = (id: string) => {
+    const f = fields.get(id)!;
+    return (f.expression || f.id).split(".").map(identifier).join(".");
+  };
+  const compiledFilters = compileFilterPredicates(
+    q.filters,
+    s.kind === "semantic_view" ? sem : field,
+  );
+  const filters = compiledFilters.predicates;
+  binds.push(...compiledFilters.binds);
   let sql: string;
   let columns: string[];
   const rollup =

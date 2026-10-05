@@ -164,7 +164,7 @@ it("checks lookup uniqueness within the query snapshot and uses the same exact t
   );
   expect(compiled.validationColumn).toBeTruthy();
   expect(compiled.columns).not.toContain(compiled.validationColumn);
-  expect(compiled.sql).toContain('WITH "__snowlens_right" AS');
+  expect(compiled.sql).toContain('"__snowlens_right" AS');
   expect(compiled.sql).toContain("HAVING COUNT(*)>1");
   expect(compiled.sql).toContain(
     `COLLATE(l."PRODUCT", '') = COLLATE(r."PRODUCT", '')`,
