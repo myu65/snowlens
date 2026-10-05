@@ -1,13 +1,124 @@
 import { test, expect, type Page } from "@playwright/test";
+import ExcelJS from "exceljs";
+import { readFile } from "node:fs/promises";
 async function pick(page: Page, title: string, id: string) {
   const dialog = page.getByRole("dialog", { name: title });
   await dialog.getByLabel("項目を検索", { exact: true }).fill(id);
   await dialog.getByRole("button").filter({ hasText: id }).click();
 }
 async function ready(page: Page) {
-  await expect(page.getByRole("button", { name: "↓ CSV" })).toBeEnabled();
+  await expect(
+    page.getByRole("button", { name: "↓ ダウンロード" }),
+  ).toBeEnabled();
   await expect(page.locator(".error-banner")).toHaveCount(0);
 }
+
+test("Excel and CSV exports preserve conditions, personal headers, typed tables and mobile controls", async ({
+  page,
+  request,
+}) => {
+  await page.goto("/");
+  await page.getByRole("button", { name: /DATASET 受注実績/ }).click();
+  await ready(page);
+  await page
+    .getByRole("button", { name: "自分用の項目名", exact: true })
+    .click();
+  const fields = page.getByRole("dialog", { name: "個人用の項目名を編集" });
+  await fields
+    .getByLabel("PRODUCTの個人表示名", { exact: true })
+    .fill("分析用の製品名");
+  await fields
+    .getByRole("button", { name: "この分析に反映", exact: true })
+    .click();
+  await page.getByRole("button", { name: "＋ 条件", exact: true }).click();
+  await pick(page, "検索条件の項目を選ぶ", "ORDER_DATE");
+  await page.getByLabel("条件1の比較").selectOption("gte");
+  await page.getByLabel("条件1の値").fill("2026-10-01");
+  await ready(page);
+  await page.getByRole("button", { name: "↓ ダウンロード" }).click();
+  const dialog = page.getByRole("dialog", {
+    name: "ダウンロード",
+    exact: true,
+  });
+  await expect(
+    dialog.getByRole("radio", { name: /Excel（.xlsx）/ }),
+  ).toBeChecked();
+  await page.screenshot({ path: "artifacts/download-desktop.png" });
+  const downloading = page.waitForEvent("download");
+  await dialog.getByRole("button", { name: "Excelをダウンロード" }).click();
+  const download = await downloading;
+  expect(download.suggestedFilename()).toBe("SnowLens_受注実績.xlsx");
+  await download.saveAs("artifacts/export-review.xlsx");
+  const workbook = new ExcelJS.Workbook();
+  await workbook.xlsx.load(
+    Uint8Array.from(await readFile("artifacts/export-review.xlsx")).buffer,
+  );
+  expect(workbook.worksheets.map((s) => s.name)).toEqual(["表示", "データ"]);
+  const data = workbook.getWorksheet("データ")!;
+  expect(data.getCell("A7").value).toBe("分析用の製品名");
+  expect(data.getCell("B7").value).not.toMatch(/SUM|__/);
+  expect(data.getCell("B8").type).toBe(ExcelJS.ValueType.Number);
+  expect(data.getTable("SnowLensData")).toBeDefined();
+  expect(
+    JSON.stringify(workbook.getWorksheet("表示")!.getSheetValues()),
+  ).toContain("2026-10-01");
+  await expect(dialog).toHaveCount(0);
+  await page.setViewportSize({ width: 390, height: 844 });
+  await page.getByRole("button", { name: "↓ ダウンロード" }).click();
+  await dialog.getByRole("radio", { name: /CSV（.csv）/ }).check();
+  await dialog.getByLabel("CSVの列見出し").selectOption("ids");
+  await expect(
+    dialog.getByRole("button", { name: "CSVをダウンロード" }),
+  ).toBeInViewport();
+  await page.screenshot({ path: "artifacts/download-mobile.png" });
+  const csvDownloading = page.waitForEvent("download");
+  await dialog.getByRole("button", { name: "CSVをダウンロード" }).click();
+  const csv = await csvDownloading;
+  await csv.saveAs("artifacts/export-review.csv");
+  expect(await readFile("artifacts/export-review.csv", "utf8")).toContain(
+    '"SALES_AMOUNT__SUM"',
+  );
+  const catalog = await (await request.get("/api/catalog")).json();
+  const source = catalog.sources[0];
+  const query = {
+    source: source.id,
+    dimensions: [],
+    metrics: [],
+    filters: [],
+    sort: [],
+    detail: true,
+    limit: 1,
+    offset: 0,
+  };
+  expect(
+    (
+      await request.post("/api/export", {
+        data: { query, format: "xlsx", rows: [{ SECRET: "forged" }] },
+      })
+    ).status(),
+  ).toBe(400);
+  expect(
+    (
+      await request.post("/api/export", {
+        data: {
+          query,
+          format: "csv",
+          fieldOverrides: [
+            { id: "NOT_VISIBLE", label: "偽装", description: "" },
+          ],
+        },
+      })
+    ).status(),
+  ).toBe(400);
+  expect(
+    (
+      await request.post("/api/export", {
+        headers: { Origin: "https://other.invalid" },
+        data: { query, format: "csv" },
+      })
+    ).status(),
+  ).toBe(400);
+});
 test("raw source: build, SUM, filter, sort, drill, detail, save and reopen", async ({
   page,
 }) => {
@@ -115,9 +226,13 @@ test("numeric grouping, 120-field search, owner publish, favorite, CSV and mobil
   );
   await ready(page);
   await page.getByRole("button", { name: "お気に入り", exact: true }).click();
+  await page.getByRole("button", { name: "↓ ダウンロード" }).click();
+  await page.getByRole("radio", { name: /CSV（.csv）/ }).check();
   const download = page.waitForEvent("download");
-  await page.getByRole("button", { name: "↓ CSV" }).click();
-  await expect((await download).suggestedFilename()).toBe("snowlens.csv");
+  await page.getByRole("button", { name: "CSVをダウンロード" }).click();
+  await expect((await download).suggestedFilename()).toBe(
+    "SnowLens_実験 E2E.csv",
+  );
   await page.getByRole("button", { name: "設定を折りたたむ" }).click();
   await expect(page.getByRole("button", { name: "設定を開く" })).toBeVisible();
   await page.setViewportSize({ width: 390, height: 844 });

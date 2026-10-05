@@ -45,6 +45,7 @@ import CatalogBrowser from "./components/catalog-browser";
 import FilterValue from "./components/filter-value";
 import FieldPicker from "./components/field-picker";
 import OwnerEditor from "./components/owner-editor";
+import DownloadDialog from "./components/download-dialog";
 type Picker = "dimension" | "metric" | "filter" | "drill";
 const emptyState: AppState = {
   datasets: [],
@@ -113,6 +114,7 @@ export default function SnowLens() {
     [fieldOverrides, setFieldOverrides] = useState<FieldOverride[]>([]),
     [editingFields, setEditingFields] = useState(false),
     [semanticDraftOpen, setSemanticDraftOpen] = useState(false),
+    [downloading, setDownloading] = useState(false),
     [savingView, setSavingView] = useState(false),
     [joiningTables, setJoiningTables] = useState(false),
     [joinedRight, setJoinedRight] = useState<QueryableSource>(),
@@ -557,26 +559,6 @@ export default function SnowLens() {
       },
       true,
     );
-  }
-  async function csv() {
-    if (!query) return;
-    try {
-      const response = await fetch("/api/query", {
-        method: "POST",
-        headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({ query, datasetId: dataset?.id, csv: true }),
-      });
-      if (!response.ok) throw Error("CSVを出力できません");
-      const url = URL.createObjectURL(await response.blob());
-      const a = document.createElement("a");
-      a.href = url;
-      a.download = "snowlens.csv";
-      a.click();
-      URL.revokeObjectURL(url);
-      setNotice("現在のページをCSVに出力しました。");
-    } catch (e) {
-      setError((e as Error).message);
-    }
   }
   const filtered = sources.filter(
     (s) =>
@@ -1429,9 +1411,9 @@ export default function SnowLens() {
                       </button>
                       <button
                         disabled={!result || busy}
-                        onClick={() => void csv()}
+                        onClick={() => setDownloading(true)}
                       >
-                        ↓ CSV
+                        ↓ ダウンロード
                       </button>
                     </div>
                   </div>
@@ -1947,6 +1929,18 @@ export default function SnowLens() {
             setRetry((r) => r + 1);
             setNotice("Datasetを公開しました。ホームから開けます。");
           }}
+        />
+      )}
+      {downloading && query && result && (
+        <DownloadDialog
+          query={query}
+          result={result}
+          datasetId={dataset?.id}
+          fieldOverrides={fieldOverrides.filter((f) =>
+            fields.some((field) => field.id === f.id),
+          )}
+          onClose={() => setDownloading(false)}
+          onDone={setNotice}
         />
       )}
       {save && query && (
