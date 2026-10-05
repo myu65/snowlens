@@ -29,6 +29,9 @@ SNOWFLAKE_APPS.APP.SNOWLENS`. Grant service access using the current App Runtime
    readable; row-access/masking results must match direct caller SELECT; saved
    views/favorites must be private; owner changes must be restricted; query abort
    should cancel execution. Try Table, View, Dynamic Table and Semantic View.
+   Repeat private ownership checks with both users on the same shared explorer
+   role and A switching between shared explorer/editor roles. Per-user roles are
+   not required. See [shared roles and private ownership](permissions-storage.md).
 
 Catalog and source-data statements use restricted caller rights. Store writes use
 the two fixed owner-rights procedures, whose owners have no business-source SELECT
@@ -40,7 +43,10 @@ context headers. User query execution never switches to owner rights. Do not
 deploy without verifying the identity function inside these procedures under
 two real callers. Username reuse without disabling its prior principal is unsafe.
 
-Live deployment has not been validated without a connected Snowflake account.
+Direct SQL storage/identity checks passed with two synthetic users on 2026-10-06.
+The test account rejects App Runtime builds as a trial account (395054), so live
+deployment and the trusted-ingress caller context remain unvalidated. See the
+[connected-account evidence](snowflake-validation.md). Issue #5 stays open.
 Catalog browsing loads databases, schemas and each relation kind in 100-object
 pages. Browsing metadata is cached in memory for 15 seconds, scoped to a hash of
 the caller token plus current user/primary/secondary roles. Source resolution and
@@ -60,7 +66,7 @@ relation, explicit dimension-to-column mappings and published detail columns.
 Unmapped conditions fail closed. Metric compatibility and required window
 dimensions use SHOW SEMANTIC DIMENSIONS ... FOR METRIC. These limits are visible in the UI/docs.
 
-Official references (checked 2026-10-05):
+Official references (checked 2026-10-06):
 
 - [App Runtime manifest](https://docs.snowflake.com/en/developer-guide/snowflake-app-runtime/app-yml)
 - [Query Snowflake and caller rights](https://docs.snowflake.com/en/developer-guide/snowflake-app-runtime/query-snowflake)
@@ -68,3 +74,5 @@ Official references (checked 2026-10-05):
 - [Semantic SQL](https://docs.snowflake.com/en/sql-reference/constructs/semantic_view)
 - [Row access policy limits](https://docs.snowflake.com/en/user-guide/security-row-intro)
 - [Owner and caller procedures](https://docs.snowflake.com/en/developer-guide/stored-procedure/stored-procedures-rights)
+- [Role design and managed access](https://docs.snowflake.com/en/user-guide/security-access-control-considerations)
+- [Personal Database object types](https://docs.snowflake.com/en/user-guide/personal-databases)

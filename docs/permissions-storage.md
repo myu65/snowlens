@@ -2,6 +2,18 @@
 
 個人定義は利用者本人のもので、元データを読む権限はSnowflakeが判断します。共有Datasetの編集とセマンティックビューの公開は、それぞれ別の権限を割り当てます。以下は実装と導入時の条件です。SQLプロシージャとApp Runtimeでの動作は、接続したアカウントでの検証が必要です。
 
+## ロールは職務、個人保存は本人で分ける
+
+Snowflakeの基本は、オブジェクトの権限をアクセス用のロールにまとめ、職務のロールへ割り当てるRBACです。SnowLensでは既存の業務ロールを使い、閲覧・Dataset編集・公開などの追加権限を共通のロールとして組み合わせます。人数に応じて個人ロールを作る設計ではありません。[公式のロール設計](https://docs.snowflake.com/en/user-guide/security-access-control-considerations)
+
+同じ閲覧ロールを使う2人でも、個人定義と入力の所有者は別です。共通の保存表に本人の変更しないIDを記録し、行ポリシーで読み手を制限します。保存は本人のIDを確認する固定プロシージャを通します。元データのSELECT、個人保存、共有化はそれぞれ別の判断です。
+
+ユーザーへの直接grantであるUBACは、個人開発や共同作業を補う選択肢です。ただし、共通の保存表へのSELECT grantだけでは本人の行に限定できません。SnowLensでは共通ロールと行ポリシーを使います。Personal Databaseには通常のテーブルデータを保存できないため、個人入力は通常のデータベースに置きます。[UBACの位置付け](https://docs.snowflake.com/en/user-guide/security-access-control-considerations#comparing-and-contrasting-rbac-with-ubac)、[Personal Databaseの対象](https://docs.snowflake.com/en/user-guide/personal-databases)
+
+導入時は、1つのデータベース内の権限をdatabase roleにまとめ、職務のaccount roleへ割り当てる構成も使えます。処理所有者のロールは管理者の階層に含め、最上位をSYSADMINへつなぎます。利用者やRuntimeに保存処理の所有者ロールを継承させません。通常のオブジェクト作成にはSYSADMIN配下のロールを使い、ACCOUNTADMINをアプリの実行ロールにしません。[ロールの階層と管理](https://docs.snowflake.com/en/user-guide/security-access-control-considerations#managing-custom-roles)
+
+共有するSemantic Viewの公開先には、管理者がgrantを管理するmanaged access schemaを使う構成を推奨します。これは導入時の構成案です。アプリ内の公開実行やgrantの自動付与は実装していません。[grantの管理](https://docs.snowflake.com/en/user-guide/security-access-control-considerations#centralizing-grant-management-using-managed-access-schemas)
+
 ## 保存対象と保存先
 
 | 対象         | 保存先              | 内容                                                                               | 読み手                   |
@@ -23,18 +35,23 @@
 
 ユーザー名は変更・再利用されるため、保存者IDとは分けます。ID管理者はIdP/SCIMの変更しないIDか、本人用に発行したUUIDを登録します。名前の変更では同じIDを引き継ぎます。削除・退職ではアクセスと対応を無効にし、名前を再利用する前に古い対応を止めます。新しい人には新しいIDを発行します。この連携は導入先のID管理手順に組み込む条件で、アプリがSCIMを自動同期する実装ではありません。[SCIMの識別子](https://docs.snowflake.com/en/user-guide/scim-user-api-reference)
 
+利用者が多い導入先では、IdPのグループをSCIMで共通ロールへ同期し、本人IDの登録・変更・無効化も同じ管理手順に含めます。SnowflakeのSCIMユーザーIDは変更しないGUIDですが、SHOW USERSやDESCRIBE USERには出ません。氏名やLOGIN_NAMEから本人IDを推測せず、管理側で確認した対応を登録します。現在のアプリにはSCIM連携の処理がないため、この管理手順を省くことはできません。[SCIMのユーザーとグループ](https://docs.snowflake.com/en/user-guide/scim-intro)
+
 利用者とRuntimeにPRINCIPALSの直接更新権限を渡しません。対応を読むSecure Functionの所有者は、対応表のSELECTだけを持ちます。名称の再利用と対応の無効化順序はIssue #5の検証に含めます。
+
+「自分のみ」は一般利用者間の閲覧範囲です。IDやポリシーを変更できる管理者の管理操作を禁止する意味ではありません。対応の変更と復旧は、導入先の監査手順で管理します。
 
 ## 権限を操作単位で分ける
 
-| 権限の役割              | 許可する操作                                             | 保存表・元データへの直接権限                                                        |
-| ----------------------- | -------------------------------------------------------- | ----------------------------------------------------------------------------------- |
-| データ閲覧者            | 現在の権限で表・View・Dynamic Table・Semantic Viewを開く | 許可した元データのSELECT、warehouseと親オブジェクトのUSAGE                          |
-| 個人保存を使う利用者    | 自分の定義・入力の作成、変更、削除                       | 行ポリシー付き個人表のSELECT、WRITE_PRIVATE_STATEのUSAGE                            |
-| Dataset編集者           | 共有定義の作成と、自分が所有する定義の変更               | DATASETSのSELECT、WRITE_DATASETのUSAGE                                              |
-| セマンティック公開者    | 承認されたソースを、指定スキーマと対象ロールへ公開       | 公開先のCREATE VIEW / CREATE SEMANTIC VIEW、必要なSELECT。閲覧者へのGRANTは別に管理 |
-| 個人保存の処理所有者    | 所有者条件付きの保存DMLと保存者の対応取得                | 個人保存2表のDMLと対応表のSELECT。業務データのSELECTと公開DDLは付けない             |
-| Dataset保存の処理所有者 | 所有者条件付きの共有定義DML                              | DATASETSのDMLとCURRENT_PRINCIPALのUSAGE。個人表と業務データには権限を付けない       |
+| 権限の役割                     | 許可する操作                                             | 保存表・元データへの直接権限                                                        |
+| ------------------------------ | -------------------------------------------------------- | ----------------------------------------------------------------------------------- |
+| データ閲覧者                   | 現在の権限で表・View・Dynamic Table・Semantic Viewを開く | 許可した元データのSELECT、warehouseと親オブジェクトのUSAGE                          |
+| 個人保存を使う利用者           | 自分の定義・入力の作成、変更、削除                       | 行ポリシー付き個人表のSELECT、WRITE_PRIVATE_STATEのUSAGE                            |
+| Dataset編集者                  | 共有定義の作成と、自分が所有する定義の変更               | DATASETSのSELECT、WRITE_DATASETのUSAGE                                              |
+| セマンティック公開者           | 承認されたソースを、指定スキーマと対象ロールへ公開       | 公開先のCREATE VIEW / CREATE SEMANTIC VIEW、必要なSELECT。閲覧者へのGRANTは別に管理 |
+| 本人確認の関数・ポリシー所有者 | 有効な保存者IDの確認と行の閲覧制限                       | PRINCIPALSのSELECT。業務データのSELECTと保存DMLは付けない                           |
+| 個人保存の処理所有者           | 所有者条件付きの保存DMLと保存者の対応取得                | 個人保存2表のDMLとCURRENT_PRINCIPALのUSAGE。業務データのSELECTと公開DDLは付けない   |
+| Dataset保存の処理所有者        | 所有者条件付きの共有定義DML                              | DATASETSのDMLとCURRENT_PRINCIPALのUSAGE。個人表と業務データには権限を付けない       |
 
 前の設計では利用者に保存表のDMLを付けていました。行アクセスポリシーは行の閲覧を制限しても、INSERTで指定する所有者までは制限しません。そのため、書き込みは固定処理だけを持つ専用プロシージャに絞りました。[行アクセスポリシーの仕様](https://docs.snowflake.com/en/user-guide/security-row-intro)
 
@@ -64,4 +81,4 @@ APIの削除は現在の保存行を削除します。SnowflakeのTime Travel、
 
 旧版のユーザー名OWNERを使う領域は、自動で移行しません。アクセスを停止し、旧ポリシーを外す間の利用者grantを撤回してから、ID管理者が本人との対応を確認してIDへ変換します。新しい行ポリシーを付け、権限を戻して2ユーザーで確認します。現役ユーザーと同名の削除済みユーザーを、名前だけで同じ本人と判断しません。
 
-まだ接続したSnowflakeで検証していません。上記の構造だけで安全性を証明した扱いにはしません。ID連携、ポリシー、プロシージャ、直接DMLの拒否、ロール変更、公開後の見え方を確認するまでIssue #5を残します。
+2026年10月6日に、SnowflakeへSQLを直接実行して保存処理と本人の分離を確認しました。同じ閲覧ロールの2ユーザーによる個人入力の分離、ロール変更、名前の変更・再利用、未登録・重複・無効な対応、直接DMLの拒否、版の競合、Datasetの編集権限を確認しています。App Runtimeはtrialアカウント制限で起動できず、アプリ経由のcaller権限は未検証です。[検証の記録](snowflake-validation.md)に範囲を記載し、Issue #5を残します。

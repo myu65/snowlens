@@ -2,12 +2,17 @@
 
 Issue #5 remains open until these checks run in an enabled Snowflake account.
 Mock, metadata fixtures and HTTP cancellation alone are not proof of caller rights.
+The [connected-account record](snowflake-validation.md) separates direct SQL checks
+from App Runtime validation, which remains blocked by the test account's trial status.
 
 ## Prerequisites
 
 - Deploy through the trusted App Runtime ingress using `docs/deployment.md`.
 - Prepare two distinct test users: A has Dataset Owner write grants; B has only
   explorer grants. Avoid admin roles for either caller.
+- Also test both users with the same shared explorer role and switch A between
+  shared explorer/editor roles. Private ownership must follow the immutable
+  principal, while source access follows the active grants and policies.
 - Register different immutable principal IDs and install the narrow private and
   Dataset write procedures. Neither caller/runtime role may inherit direct store
   DML, identity-admin privileges, storage-owner roles or business source ownership.

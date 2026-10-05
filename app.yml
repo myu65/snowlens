@@ -11,6 +11,7 @@ ignore:
   - .next
   - .git
   - .env*
+  - "*.tsbuildinfo"
   - .snowlens-mock.json
   - .snowlens-e2e.json
   - .snowlens-mock.json.tmp

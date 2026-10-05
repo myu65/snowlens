@@ -1,5 +1,7 @@
 -- Run with an administrator role in the chosen app database.
 -- Change database and roles to your installation; do not grant blanket access.
+-- Use SYSADMIN or a subordinate setup role for ordinary object creation.
+-- Grant dedicated owner roles to the administrative role hierarchy only, not users/runtime.
 CREATE DATABASE IF NOT EXISTS SNOWFLAKE_APPS;
 CREATE SCHEMA IF NOT EXISTS SNOWFLAKE_APPS.APP;
 -- PRINCIPALS is administered through the identity lifecycle, not through the app.
@@ -66,9 +68,16 @@ ALTER TABLE SNOWFLAKE_APPS.APP.PERSONAL_TABLES ADD ROW ACCESS POLICY
 -- Add equivalent caller grants for views, dynamic tables and semantic views you expose.
 
 -- Function owner gets only identity-map SELECT and database/schema USAGE.
--- GRANT SELECT ON TABLE SNOWFLAKE_APPS.APP.PRINCIPALS TO ROLE <PRIVATE_STORAGE_OWNER_ROLE>;
+-- GRANT USAGE ON DATABASE SNOWFLAKE_APPS TO ROLE <IDENTITY_OWNER_ROLE>;
+-- GRANT USAGE ON SCHEMA SNOWFLAKE_APPS.APP TO ROLE <IDENTITY_OWNER_ROLE>;
+-- GRANT SELECT ON TABLE SNOWFLAKE_APPS.APP.PRINCIPALS TO ROLE <IDENTITY_OWNER_ROLE>;
 -- GRANT OWNERSHIP ON FUNCTION SNOWFLAKE_APPS.APP.CURRENT_PRINCIPAL()
---   TO ROLE <PRIVATE_STORAGE_OWNER_ROLE> COPY CURRENT GRANTS;
+--   TO ROLE <IDENTITY_OWNER_ROLE> COPY CURRENT GRANTS;
+-- GRANT ROLE <IDENTITY_OWNER_ROLE> TO ROLE SYSADMIN;
+-- GRANT ROLE <PRIVATE_STORAGE_OWNER_ROLE> TO ROLE SYSADMIN;
+-- GRANT ROLE <DATASET_STORAGE_OWNER_ROLE> TO ROLE SYSADMIN;
+-- GRANT OWNERSHIP ON ROW ACCESS POLICY SNOWFLAKE_APPS.APP.PRIVATE_VISIBILITY
+--   TO ROLE <IDENTITY_OWNER_ROLE> COPY CURRENT GRANTS;
 -- App roles must not receive PRINCIPALS table privileges or either storage-owner role.
 -- Existing name-based OWNER installations need an offline reviewed migration;
 -- do not silently retain the old policy or fall back to CURRENT_USER ownership.

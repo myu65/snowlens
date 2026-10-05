@@ -47,8 +47,11 @@ are needed. Mock saved metadata persists in `.snowlens-mock.json` (gitignored).
 - Keep previous results during updates; debounce/cancel obsolete requests; virtualize rows
   and field lists. Default page is 200 rows, maximum is 1,000.
 
-The mock proves these UI flows. Live Snowflake deployment, role/masking policies and
-Semantic View compatibility, storage procedures and identity lifecycle still require validation in a connected account; see
+The mock proves these UI flows. Direct SQL storage/identity checks passed with two
+synthetic users sharing an explorer role; see the [connected-account record](docs/snowflake-validation.md).
+App Runtime deployment is blocked by the test account's trial status (395054).
+Trusted-ingress caller rights, role/masking policies and Semantic View compatibility
+still require App Runtime validation; see
 [deployment limits](docs/deployment.md). Dataset publication is a UX definition,
 not an additional data-permission layer.
 
