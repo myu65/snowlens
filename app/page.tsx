@@ -17,6 +17,7 @@ import {
 } from "@/lib/model";
 import { recommendedQuery } from "@/lib/mock";
 import Grid from "./components/grid";
+import FilterValue from "./components/filter-value";
 import FieldPicker from "./components/field-picker";
 import OwnerEditor from "./components/owner-editor";
 type Picker = "dimension" | "metric" | "filter" | "drill";
@@ -633,28 +634,15 @@ export default function SnowLens() {
                         ))}
                       </select>
                       {!["is_null", "not_null"].includes(f.operator) && (
-                        <input
-                          aria-label={`条件${i + 1}の値`}
-                          type={
-                            field && isNumeric(field)
-                              ? "number"
-                              : field && /DATE/.test(field.type)
-                                ? "date"
-                                : "text"
-                          }
-                          value={String(f.value ?? "")}
-                          onChange={(e) =>
+                        <FilterValue
+                          field={field}
+                          query={query}
+                          index={i}
+                          datasetId={dataset?.id}
+                          onChange={(value) =>
                             change({
                               filters: query.filters.map((x, j) =>
-                                j === i
-                                  ? {
-                                      ...x,
-                                      value:
-                                        field && isNumeric(field)
-                                          ? Number(e.target.value)
-                                          : e.target.value,
-                                    }
-                                  : x,
+                                j === i ? { ...x, value } : x,
                               ),
                             })
                           }
@@ -1017,14 +1005,22 @@ export default function SnowLens() {
                 ×
               </button>
             </div>
-            <button onClick={() => focus()}>この値だけ見る</button>
-            <button onClick={() => focus(true)}>この値を除外</button>
+            {fields.some(
+              (f) => f.id === cell.column && f.semantic !== "metric",
+            ) && (
+              <>
+                <button onClick={() => focus()}>この値だけ見る</button>
+                <button onClick={() => focus(true)}>この値を除外</button>
+              </>
+            )}
             <button
               onClick={() =>
                 change({ detail: true, filters: cellFilter(), sort: [] }, true)
               }
             >
-              明細を見る
+              {query.metrics.some((m) => metricKey(m) === cell.column)
+                ? "この数字の明細を見る"
+                : "明細を見る"}
             </button>
             {fields.some(
               (f) => f.id === cell.column && f.semantic !== "metric",
