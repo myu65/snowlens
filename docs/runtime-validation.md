@@ -2,12 +2,17 @@
 
 Issue #5 remains open until these checks run in an enabled Snowflake account.
 Mock, metadata fixtures and HTTP cancellation alone are not proof of caller rights.
+The [connected-account record](snowflake-validation.md) separates direct SQL checks
+from App Runtime validation, which remains blocked by the test account's trial status.
 
 ## Prerequisites
 
 - Deploy through the trusted App Runtime ingress using `docs/deployment.md`.
 - Prepare two distinct test users: A has Dataset Owner write grants; B has only
   explorer grants. Avoid admin roles for either caller.
+- Also test both users with the same shared explorer role and switch A between
+  shared explorer/editor roles. Private ownership must follow the immutable
+  principal, while source access follows the active grants and policies.
 - Register different immutable principal IDs and install the narrow private and
   Dataset write procedures. Neither caller/runtime role may inherit direct store
   DML, identity-admin privileges, storage-owner roles or business source ownership.
@@ -142,3 +147,17 @@ Attach account/version, deployment revision, synthetic fixture definitions,
 redacted query-history IDs, PASS/FAIL results and both role names to Issue #5.
 Do not attach tokens, cookies, auth state, real business rows or private results.
 Close it only after every check succeeds.
+
+## Gate for the proposed UBAC physical inputs
+
+The app currently uses bound JSON inputs. The proposed physical-table storage in
+[permissions/storage](permissions-storage.md) has direct SQL and restricted-caller
+SQL-procedure evidence only; it is not implemented or validated in App Runtime.
+Before enabling it, repeat the two-user checks through trusted ingress, verify
+effective secondary roles and session policies, and prove that user direct grants
+intersect with Runtime caller grants. Test each side's SELECT revocation separately.
+Enabling ALL must not widen the approved business-source or masking/row-policy scope.
+Also validate the input creation/grant lifecycle, partial-failure cleanup, registered
+principal binding, typed writes/version conflicts, rename/drop/name reuse and shared
+publication promotion. Input-owner roles must have no business SELECT or publication
+grants. Do not use owner credentials or enable a fallback if caller UBAC is denied.
