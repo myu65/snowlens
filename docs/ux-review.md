@@ -63,7 +63,7 @@ requirements, CSV escaping and bounded request bodies.
   verification against a live Snowflake account.
 - Mock mode is one local user. Production state uses Snowflake storage and RBAC.
 - Offset pagination is not a consistent snapshot while data changes.
-- Modal focus trapping, URL/shareable query state and Dataset/saved-definition
+- Modal focus trapping and Dataset/saved-definition
   conflict handling remain follow-ups. Personal-table edits and deletes already
   use versions; standard Snowflake table insertion races still need live evidence.
 - `npm audit --omit=dev` has no production vulnerabilities. Full audit currently
@@ -141,3 +141,37 @@ rights revocation; they do not establish App Runtime safety.
 ![Independent input conditions](images/composite-join-conditions.png)
 
 ![Stacked keys on a narrow screen](images/composite-join-mobile.png)
+
+## Shared ledgers and screen URLs
+
+Department ledgers have a separate list, row form and common layout editor.
+Inputters edit the layout; viewers cannot create, update, delete or save layouts.
+Field defaults apply to new rows. Archived fields keep stored values. Forms keep
+zero/false distinct from empty values and retain drafts after validation or version
+conflicts. Fixed controls remain reachable at 390px. Field order has drag and
+keyboard-accessible buttons. Mock roles demonstrate the UX only.
+
+Hybrid is the deployment default for data and definition tables. Administrators
+select standard storage explicitly per department; existing tables are not
+converted. Native capability probes, exact affected counts, a real definition-row
+write lock and transactional version checks protect writes. Only changed business
+fields are updated. Source resolution still uses fresh caller SELECT; storage
+procedure owners gain no source privileges. Twelve synthetic standard-table SQL
+checks passed, including concurrent writes, literal searches and grant revocation.
+Hybrid and App Runtime remain unvalidated on the trial account.
+
+All exploration dialogs and ledger pages have documented URL entry points.
+Current query, personal labels, catalog scope, row/search/page and mapped-detail
+page state survive reload/back/forward. Private IDs resolve for the current user;
+invalid links and revoked targets do not select alternatives. Input drafts remain
+outside URLs, with discard confirmation on navigation. Unit/API guards and 29
+production-build journeys cover both new and existing operations. See
+[URL examples](urls.md) and [deployment configuration](ledgers.md).
+
+![Desktop ledger row form](images/ledger-record-desktop.png)
+
+![Mobile ledger row form](images/ledger-record-mobile.png)
+
+![Common layout editor](images/ledger-layout-desktop.png)
+
+![Mobile layout controls](images/ledger-layout-mobile.png)

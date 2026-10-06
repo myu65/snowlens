@@ -1,4 +1,14 @@
 "use client";
+import { DraftLink } from "./components/ledger-ui";
+import { useUrlState } from "./components/use-url-state";
+import {
+  exploreHref,
+  parseExploreLocation,
+  type ExploreLocation,
+} from "@/lib/explore-location";
+import type { CatalogRequest } from "@/lib/catalog";
+import { validateQuery } from "@/lib/compiler";
+import { joinedSource } from "@/lib/personal-join";
 import {
   useState,
   useEffect,
@@ -35,7 +45,7 @@ import SemanticDraftEditor from "./components/semantic-draft-editor";
 import TableJoinBuilder from "./components/table-join-builder";
 import { relationJoinedSource, relationJoinKeys } from "@/lib/relation-join";
 import PersonalFieldsEditor from "./components/personal-fields-editor";
-import { applyFieldOverrides } from "@/lib/definitions";
+import { applyFieldOverrides, validateFieldOverrides } from "@/lib/definitions";
 import PersonalTableEditor from "./components/personal-table-editor";
 import JoinBuilder from "./components/join-builder";
 import { personalFields } from "@/lib/personal";
@@ -88,6 +98,7 @@ async function api<T>(
     cache: "no-store",
   });
   const data = await response.json();
+  if (signal?.aborted) throw new DOMException("Aborted", "AbortError");
   if (!response.ok) throw Error(data.error || "通信できません");
   return data;
 }
@@ -136,7 +147,11 @@ export default function SnowLens() {
     [composeAggregation, setComposeAggregation] =
       useState<ComposeAggregation>("auto"),
     [dropTarget, setDropTarget] = useState<"dimension" | "metric">(),
-    [homeTab, setHomeTab] = useState("all");
+    [homeTab, setHomeTab] = useState<"all" | "favorite" | "recent">("all"),
+    [ready, setReady] = useState(false),
+    [savedViewId, setSavedViewId] = useState<string>(),
+    [catalogScope, setCatalogScope] = useState<CatalogRequest>({}),
+    [pendingCell, setPendingCell] = useState<ExploreLocation["cell"]>();
   const cache = useRef(new Map<string, Result>()),
     requestId = useRef(0),
     openId = useRef(0);
@@ -158,6 +173,7 @@ export default function SnowLens() {
       setError((e as Error).message);
     } finally {
       setOpening(false);
+      setReady(true);
     }
   }, []);
   useEffect(() => {
@@ -179,7 +195,10 @@ export default function SnowLens() {
     const id = ++requestId.current,
       controller = new AbortController();
     const key = JSON.stringify([query, dataset?.id, personalVersion]);
-    const cached = mode === "mock" ? cache.current.get(key) : undefined;
+    // Shared mock ledgers can be changed in another page or request. Their
+    // physical JSON identifiers must be read afresh on refresh, like live data.
+    const cacheable = mode === "mock" && !query.source.startsWith("[");
+    const cached = cacheable ? cache.current.get(key) : undefined;
     if (cached) setResult(cached);
     setBusy(true);
     setError("");
@@ -193,7 +212,7 @@ export default function SnowLens() {
             controller.signal,
           ));
         if (requestId.current === id) {
-          if (mode === "mock") cache.current.set(key, data);
+          if (cacheable) cache.current.set(key, data);
           if (cache.current.size > 30)
             cache.current.delete(cache.current.keys().next().value!);
           setResult(data);
@@ -216,7 +235,11 @@ export default function SnowLens() {
     s: Pick<QueryableSource, "id">,
     d?: Dataset,
     saved?: SavedView,
+    location?: ExploreLocation,
+    signal?: AbortSignal,
+    currentState = state,
   ) {
+    if (!location) locationControls.cancelRestore();
     const id = ++openId.current;
     setOpening(true);
     setError("");
@@ -224,41 +247,95 @@ export default function SnowLens() {
     setCell(undefined);
     setFactQuery(undefined);
     setJoining(false);
+    setJoiningTables(false);
+    setPersonalEditor(undefined);
+    setDeletePersonal(undefined);
+    setPicker(undefined);
+    setSemanticDraftOpen(false);
+    setOwner(false);
+    setSave(false);
+    setDownloading(false);
+    setPendingCell(undefined);
     try {
       const full = await api<QueryableSource>(
         "/api/catalog?source=" + encodeURIComponent(s.id),
+        undefined,
+        signal,
       );
       if (id !== openId.current) return;
       window.scrollTo(0, 0);
       if (saved?.datasetId && !d)
         throw Error("保存した表示のDatasetを利用できません。");
-      const savedRight =
-        saved?.query.join && "rightSource" in saved.query.join
-          ? await api<QueryableSource>(
-              "/api/catalog?source=" +
-                encodeURIComponent(saved.query.join.rightSource),
-            )
-          : undefined;
+      const nextQuery =
+        location?.q || saved?.query || d?.defaultView || initialQuery(full);
+      const rightId =
+        nextQuery.join && "rightSource" in nextQuery.join
+          ? nextQuery.join.rightSource
+          : location?.right;
+      const savedRight = rightId
+        ? await api<QueryableSource>(
+            "/api/catalog?source=" + encodeURIComponent(rightId),
+            undefined,
+            signal,
+          )
+        : undefined;
       if (id !== openId.current) return;
+      const base = {
+        ...full,
+        fields: full.fields.filter(
+          (f) => !d || d.fields.some((df) => df.id === f.id),
+        ),
+      };
+      let available = base;
+      if (nextQuery.join && "rightSource" in nextQuery.join) {
+        if (!savedRight) throw Error("結合先を利用できません。");
+        available = relationJoinedSource(base, savedRight, nextQuery.join);
+      } else if (nextQuery.join) {
+        const personalJoin = nextQuery.join;
+        if (
+          !currentState.personalTables?.some(
+            (t) => t.id === personalJoin.tableId,
+          )
+        )
+          throw Error("この個人テーブルは利用できません。");
+        const table = await api<PersonalTable>(
+          "/api/personal-table?id=" +
+            encodeURIComponent(nextQuery.join.tableId),
+          undefined,
+          signal,
+        );
+        available = joinedSource(base, nextQuery.join, table);
+      }
+      const checked = validateQuery(nextQuery, available);
+      const overrides = location?.fields || saved?.fieldOverrides || [];
+      validateFieldOverrides(overrides, available.fields);
+      if (id !== openId.current || signal?.aborted) return;
       setJoinedRight(savedRight);
       setSource(full);
       setDataset(d);
-      setFieldOverrides(saved?.fieldOverrides || []);
+      setSavedViewId(saved?.id);
+      setFieldOverrides(overrides);
       setEditingFields(false);
-      setQuery(saved?.query || d?.defaultView || initialQuery(full));
+      setQuery(checked);
       setResult(undefined);
       setHistory([]);
-      setIntro(!d && !saved);
-      setSide(true);
+      setIntro(!d && !saved && !location?.q);
+      setSide(location?.side ?? true);
       setSelectedColumns([]);
       void mutate("recent", s.id).catch((e) => setNotice(e.message));
     } catch (e) {
+      if (id !== openId.current || signal?.aborted) return;
+      setSource(undefined);
+      setQuery(undefined);
+      setResult(undefined);
       setError((e as Error).message);
+      if (location) throw e;
     } finally {
       if (id === openId.current) setOpening(false);
     }
   }
   async function editPersonal(id: string) {
+    locationControls.cancelRestore();
     try {
       const table = await api<PersonalTable>(
         "/api/personal-table?id=" + encodeURIComponent(id),
@@ -269,10 +346,23 @@ export default function SnowLens() {
     }
   }
   function home() {
+    if (
+      !window.dispatchEvent(
+        new Event("snowlens-leave-draft", { cancelable: true }),
+      )
+    )
+      return;
+    locationControls.cancelRestore();
+    resetExplore();
+  }
+  function resetExplore() {
     window.scrollTo(0, 0);
     openId.current++;
     setSource(undefined);
     setQuery(undefined);
+    requestId.current++;
+    setResult(undefined);
+    setBusy(false);
     setDataset(undefined);
     setFieldOverrides([]);
     setEditingFields(false);
@@ -280,6 +370,15 @@ export default function SnowLens() {
     setJoining(false);
     setJoiningTables(false);
     setSemanticDraftOpen(false);
+    setSavedViewId(undefined);
+    setPersonalEditor(undefined);
+    setDeletePersonal(undefined);
+    setPicker(undefined);
+    setOwner(false);
+    setSave(false);
+    setDownloading(false);
+    setCell(undefined);
+    setPendingCell(undefined);
     setJoinedRight(undefined);
     setSelectedColumns([]);
     setError("");
@@ -560,6 +659,205 @@ export default function SnowLens() {
       true,
     );
   }
+  async function applyLocation(location: ExploreLocation, signal: AbortSignal) {
+    // Saved definitions and personal inputs always resolve for the current caller.
+    // A link cannot supply an owner or make an unavailable definition public.
+    let storageNotice = "";
+    const freshState = await api<AppState>(
+      "/api/state",
+      undefined,
+      signal,
+    ).catch((error) => {
+      if (signal.aborted) throw error;
+      if (
+        location.dataset ||
+        location.saved ||
+        location.personal ||
+        (location.q?.join && "tableId" in location.q.join)
+      )
+        throw error;
+      storageNotice = error.message + " データの直接探索は利用できます。";
+      return emptyState;
+    });
+    if (signal.aborted) return;
+    resetExplore();
+    setNotice(storageNotice);
+    setState(freshState);
+    setHomeTab(location.tab || "all");
+    setSearch(location.search || "");
+    setCatalogScope(location.catalog || {});
+    const saved = location.saved
+      ? freshState.saved.find((v) => v.id === location.saved)
+      : undefined;
+    if (location.saved && !saved)
+      throw Error("この保存した表示は利用できません。");
+    const datasetId = saved?.datasetId || location.dataset;
+    const definition = datasetId
+      ? freshState.datasets.find((d) => d.id === datasetId)
+      : undefined;
+    if (datasetId && !definition) throw Error("このDatasetは利用できません。");
+    const sourceId =
+      location.source || saved?.query.source || definition?.source;
+    if (
+      sourceId &&
+      ((saved && saved.query.source !== sourceId) ||
+        (definition && definition.source !== sourceId))
+    )
+      throw Error("URLのデータと定義が一致しません。");
+    if (sourceId)
+      await open(
+        { id: sourceId },
+        definition,
+        saved,
+        location,
+        signal,
+        freshState,
+      );
+    if (signal.aborted) return;
+    if (
+      location.fact &&
+      (location.fact.source !== sourceId || !definition?.factDetail)
+    )
+      throw Error("このDatasetには利用できる明細の定義がありません。");
+    if (location.personal) {
+      const table = await api<PersonalTable>(
+        "/api/personal-table?id=" + encodeURIComponent(location.personal),
+        undefined,
+        signal,
+      );
+      if (signal.aborted) return;
+      if (location.dialog === "personal")
+        setPersonalEditor({ table, afterJoin: location.afterJoin });
+      else if (location.dialog === "personal-delete") setDeletePersonal(table);
+      else setJoinTableHint(table.id);
+    }
+    switch (location.dialog) {
+      case "personal":
+        if (!location.personal)
+          setPersonalEditor({ afterJoin: location.afterJoin });
+        break;
+      case "personal-join":
+        setJoining(true);
+        break;
+      case "table-join":
+        setJoiningTables(true);
+        break;
+      case "download":
+        setDownloading(true);
+        break;
+      case "save":
+        setSaveName(saved?.name || definition?.name || sourceId || "表示");
+        setSave(true);
+        break;
+      case "fields":
+        setEditingFields(true);
+        break;
+      case "semantic":
+        setSemanticDraftOpen(true);
+        break;
+      case "dataset":
+        setOwner(true);
+        break;
+      case "dimension":
+      case "metric":
+      case "filter":
+      case "drill":
+        setPicker(location.dialog);
+        break;
+      case "fact":
+        setFactQuery(location.fact);
+        break;
+    }
+    if (location.cell) setPendingCell(location.cell);
+  }
+  const cellPosition = cell && result ? result.rows.indexOf(cell.row) : -1;
+  const urlCell =
+    pendingCell ||
+    (cell && cellPosition >= 0
+      ? { row: cellPosition, column: cell.column }
+      : undefined);
+  const dialog: ExploreLocation["dialog"] = personalEditor
+    ? "personal"
+    : deletePersonal
+      ? "personal-delete"
+      : joining
+        ? "personal-join"
+        : joiningTables
+          ? "table-join"
+          : editingFields
+            ? "fields"
+            : semanticDraftOpen
+              ? "semantic"
+              : owner
+                ? "dataset"
+                : save
+                  ? "save"
+                  : downloading
+                    ? "download"
+                    : factQuery
+                      ? "fact"
+                      : picker && (picker !== "drill" || urlCell)
+                        ? picker
+                        : urlCell
+                          ? "cell"
+                          : undefined;
+  const currentSaved = state.saved.find((v) => v.id === savedViewId);
+  const unchangedSaved =
+    currentSaved &&
+    JSON.stringify(currentSaved.query) === JSON.stringify(query) &&
+    JSON.stringify(currentSaved.fieldOverrides || []) ===
+      JSON.stringify(fieldOverrides);
+  const location: ExploreLocation = {
+    source: source?.id,
+    saved: source ? savedViewId : undefined,
+    dataset: source && !savedViewId ? dataset?.id : undefined,
+    q: source && !unchangedSaved ? query : undefined,
+    fields: source && !unchangedSaved ? fieldOverrides : undefined,
+    dialog,
+    personal:
+      personalEditor?.table?.id ||
+      deletePersonal?.id ||
+      (joining ? joinTableHint : undefined),
+    afterJoin: personalEditor?.afterJoin || undefined,
+    right: joiningTables ? joinedRight?.id : undefined,
+    cell: ["cell", "drill"].includes(dialog || "") ? urlCell : undefined,
+    fact: dialog === "fact" ? factQuery : undefined,
+    tab: homeTab,
+    search,
+    catalog:
+      !source && Object.keys(catalogScope).length ? catalogScope : undefined,
+    side: source ? side : undefined,
+  };
+  const locationControls = useUrlState(location, {
+    ready,
+    parse: parseExploreLocation,
+    format: exploreHref,
+    apply: applyLocation,
+    onError: (error) => {
+      resetExplore();
+      setError("リンクを開けません。" + error.message);
+    },
+    onFormatError: (error) => setNotice(error.message),
+  });
+  useEffect(() => {
+    if (!pendingCell || !result || busy) return;
+    const timer = setTimeout(() => {
+      const row = result.rows[pendingCell.row];
+      if (
+        !row ||
+        !result.columns.includes(pendingCell.column) ||
+        (result.rowLevels?.[pendingCell.row] ?? result.dimensionCount) !==
+          result.dimensionCount
+      ) {
+        setPicker(undefined);
+        setError(
+          "リンクのセルは現在の結果では利用できません。表示を確認してください。",
+        );
+      } else setCell({ row, column: pendingCell.column });
+      setPendingCell(undefined);
+    }, 0);
+    return () => clearTimeout(timer);
+  }, [pendingCell, result, busy]);
   const filtered = sources.filter(
     (s) =>
       (s.name + " " + s.description + " " + s.database + " " + s.schema)
@@ -576,16 +874,37 @@ export default function SnowLens() {
           <span className="version">0.1</span>
         </button>
         <span className="topbar-caption">データをすぐ、深く。</span>
+        <nav className="workspace-nav" aria-label="機能を選ぶ">
+          <DraftLink href="/" aria-current="page">
+            データを見る
+          </DraftLink>
+          <DraftLink href="/ledgers">台帳に入力</DraftLink>
+        </nav>
         <span className="mode">
           <span className="status-dot" />
           {mode === "mock" ? "MOCK WORKSPACE" : "SNOWFLAKE"}
         </span>
+        <button
+          className="copy-page-link"
+          onClick={() => {
+            void navigator.clipboard
+              .writeText(window.location.href)
+              .then(() => setNotice("この画面のリンクをコピーしました。"))
+              .catch(() =>
+                setNotice("アドレス欄からこの画面のURLをコピーしてください。"),
+              );
+          }}
+        >
+          リンクをコピー
+        </button>
       </header>
       {error && (
         <div className="error-banner" role="alert">
           {error}
           <button
-            onClick={() => (source ? setRetry((r) => r + 1) : void bootstrap())}
+            onClick={() =>
+              source ? setRetry((r) => r + 1) : window.location.reload()
+            }
           >
             再試行
           </button>
@@ -716,6 +1035,8 @@ export default function SnowLens() {
             <div className="browser-panel">
               {mode === "snowflake" && (
                 <CatalogBrowser
+                  scope={catalogScope}
+                  onScopeChange={setCatalogScope}
                   onOpen={(s) => {
                     setSources((old) => [
                       ...new Map([...old, s].map((x) => [x.id, x])).values(),
@@ -733,7 +1054,9 @@ export default function SnowLens() {
                   <button
                     key={key}
                     className={homeTab === key ? "active" : ""}
-                    onClick={() => setHomeTab(key)}
+                    onClick={() =>
+                      setHomeTab(key as "all" | "favorite" | "recent")
+                    }
                   >
                     {text}
                   </button>
@@ -792,7 +1115,12 @@ export default function SnowLens() {
                             <div className="source-row" key={s.id}>
                               <button
                                 className="source-open"
-                                onClick={() => void open(s)}
+                                data-source-id={s.id}
+                                onClick={(event) => {
+                                  const id =
+                                    event.currentTarget.dataset.sourceId;
+                                  if (id) void open({ id });
+                                }}
                               >
                                 <span className="relation-icon">▦</span>
                                 <span>
@@ -844,7 +1172,7 @@ export default function SnowLens() {
                 / {source.database} / {source.schema}
               </span>
               <h1>
-                {dataset?.name || source.name}
+                {dataset?.name || source.label || source.name}
                 <span className="badge">
                   {dataset
                     ? "DATASET"
@@ -871,7 +1199,7 @@ export default function SnowLens() {
               </button>
               <button
                 onClick={() => {
-                  setSaveName(dataset?.name || source.name);
+                  setSaveName(dataset?.name || source.label || source.name);
                   setSave(true);
                 }}
               >
@@ -1917,6 +2245,7 @@ export default function SnowLens() {
         <FactDetail
           query={factQuery}
           datasetId={dataset.id}
+          onQueryChange={setFactQuery}
           onClose={() => setFactQuery(undefined)}
         />
       )}
@@ -1980,8 +2309,9 @@ export default function SnowLens() {
                 disabled={savingView || !saveName.trim()}
                 onClick={() => {
                   setSavingView(true);
+                  const savedId = crypto.randomUUID();
                   void mutate("saved", {
-                    id: crypto.randomUUID(),
+                    id: savedId,
                     name: saveName,
                     query,
                     datasetId: dataset?.id,
@@ -1990,6 +2320,7 @@ export default function SnowLens() {
                     ),
                   })
                     .then(() => {
+                      setSavedViewId(savedId);
                       setSave(false);
                       setNotice("表示を保存しました。ホームから再び開けます。");
                     })

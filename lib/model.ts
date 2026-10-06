@@ -125,6 +125,7 @@ export type Field = {
 };
 export type QueryableSource = {
   id: string;
+  label?: string;
   database: string;
   schema: string;
   name: string;

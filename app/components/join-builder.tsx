@@ -1,5 +1,6 @@
 "use client";
 import { useRef, useState, useEffect } from "react";
+import { useDraftWarning } from "./ledger-ui";
 import type {
   PersonalTable,
   PersonalJoin,
@@ -77,6 +78,14 @@ export default function JoinBuilder({
   useEffect(() => () => abort.current?.abort(), []);
   const join = { tableId, sourceField, tableField, type };
   const signature = JSON.stringify([join, table?.version, query.filters]);
+  const [baseline] = useState(signature);
+  const dirty = signature !== baseline;
+  const clearWarning = useDraftWarning(dirty);
+  function close() {
+    if (dirty && !window.confirm("未反映の結合を破棄して閉じますか？")) return;
+    clearWarning();
+    onClose();
+  }
   async function check() {
     if (!table) return;
     abort.current?.abort();
@@ -114,7 +123,7 @@ export default function JoinBuilder({
         aria-modal="true"
         aria-label="個人テーブルを結合"
         onKeyDown={(e) => {
-          if (e.key === "Escape") onClose();
+          if (e.key === "Escape") close();
         }}
       >
         <div className="dialog-title">
@@ -122,7 +131,7 @@ export default function JoinBuilder({
             <span className="eyebrow">JOIN</span>
             <h2>個人テーブルを結合</h2>
           </div>
-          <button aria-label="結合を閉じる" onClick={onClose}>
+          <button aria-label="結合を閉じる" onClick={close}>
             ×
           </button>
         </div>
@@ -155,7 +164,7 @@ export default function JoinBuilder({
             <>
               <div className="join-design">
                 <div className="join-box">
-                  <h3>{source.name}</h3>
+                  <h3>{source.label || source.name}</h3>
                   <small>元データ</small>
                   <select
                     size={7}
@@ -257,11 +266,12 @@ export default function JoinBuilder({
           )}
         </div>
         <div className="dialog-footer">
-          <button onClick={onClose}>キャンセル</button>
+          <button onClick={close}>キャンセル</button>
           <button
             className="primary"
             disabled={!table || busy || preview?.signature !== signature}
             onClick={() => {
+              clearWarning();
               onApply(queryForJoin(query, source, table!, join));
               onClose();
             }}

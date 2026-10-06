@@ -9,5 +9,7 @@ test-results/
 *.tsbuildinfo
 .snowlens-mock.json
 .snowlens-e2e.json
+.snowlens-*.ledgers.json
+.snowlens-*.ledgers.json.*.tmp
 artifacts/
 playwright-auth/

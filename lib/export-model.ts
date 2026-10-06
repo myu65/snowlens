@@ -83,7 +83,7 @@ export function exportDataRows(context: ExportContext) {
   return context.result.rows.filter((_, index) => !isSubtotal(context, index));
 }
 export function exportTitle(context: ExportContext) {
-  return context.datasetName || context.source.name;
+  return context.datasetName || context.source.label || context.source.name;
 }
 export function exportFilename(
   context: ExportContext,

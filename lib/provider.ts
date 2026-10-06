@@ -24,7 +24,7 @@ import {
   datasetSchema,
   savedSchema,
 } from "./model";
-import { parseColumn, parseSource, callerToken } from "./metadata";
+import { parseColumn, parseSource } from "./metadata";
 import { mockSources, mockRows, executeMock, defaultDatasets } from "./mock";
 import { compileQuery, validateQuery, relation, identifier } from "./compiler";
 import { headers } from "next/headers";
@@ -48,67 +48,13 @@ import {
   joinRelationRows,
   type JoinCounts,
 } from "./relation-join";
-import snowflake from "snowflake-sdk";
-export const mockMode = () => process.env.SNOWLENS_MODE !== "snowflake";
-type Rows = Record<string, unknown>[];
-// One connection per HTTP request. No global session/role pooling across users.
-export async function withSnowflake<T>(
-  fn: (
-    execute: (
-      sql: string,
-      binds?: (string | number | boolean)[],
-    ) => Promise<Rows>,
-  ) => Promise<T>,
-  signal?: AbortSignal,
-): Promise<T> {
-  const h = await headers();
-  const caller = h.get("Sf-Context-Current-User-Token");
-  const service = await readFile("/snowflake/session/token", "utf8").catch(
-    () => null,
-  );
-  if (!service || !caller)
-    throw Error(
-      "Caller credentials unavailable. Snowflake mode requires trusted App Runtime ingress.",
-    );
-  const connection = snowflake.createConnection({
-    account: process.env.SNOWFLAKE_ACCOUNT!,
-    host: process.env.SNOWFLAKE_HOST,
-    authenticator: "OAUTH",
-    token: callerToken(service, caller),
-    warehouse: process.env.SNOWFLAKE_WAREHOUSE,
-  });
-  await new Promise<void>((resolve, reject) =>
-    connection.connect((err) => (err ? reject(err) : resolve())),
-  );
-  try {
-    const execute = (sql: string, binds: (string | number | boolean)[] = []) =>
-      new Promise<Rows>((resolve, reject) => {
-        if (signal?.aborted) {
-          reject(Error("Query cancelled"));
-          return;
-        }
-        const stmt = connection.execute({
-          sqlText: sql,
-          binds,
-          complete: (err, _stmt, rows) => {
-            signal?.removeEventListener("abort", cancel);
-            if (err) reject(err);
-            else resolve(rows || []);
-          },
-        });
-        const cancel = () => {
-          stmt.cancel(() => {});
-          reject(Error("Query cancelled"));
-        };
-        signal?.addEventListener("abort", cancel, { once: true });
-        if (signal?.aborted) cancel();
-      });
-    await execute("ALTER SESSION SET STATEMENT_TIMEOUT_IN_SECONDS = 60");
-    return await fn(execute);
-  } finally {
-    await new Promise<void>((resolve) => connection.destroy(() => resolve()));
-  }
+import { mockMode, withSnowflake } from "./snowflake-session";
+export { mockMode, withSnowflake };
+async function sourceMockRows(source: QueryableSource) {
+  const { mockRegisteredLedgerRows } = await import("./ledger-provider");
+  return (await mockRegisteredLedgerRows(source)) || mockRows(source);
 }
+type Rows = Record<string, unknown>[];
 const browsingCache = new CatalogCache();
 export async function browseCatalog(
   input: CatalogRequest,
@@ -160,6 +106,9 @@ export async function resolveSource(
   id: string,
   exec?: (sql: string, binds?: (string | number | boolean)[]) => Promise<Rows>,
 ): Promise<QueryableSource> {
+  const { resolveRegisteredLedgerSource } = await import("./ledger-provider");
+  const ledger = await resolveRegisteredLedgerSource(id, exec);
+  if (ledger) return ledger;
   if (mockMode()) {
     const s = mockSources.find((s) => s.id === id);
     if (!s) throw Error("Source not accessible");
@@ -375,7 +324,7 @@ export async function runFactDetail(
           hasMore: false,
           elapsedMs: Math.round(performance.now() - started),
         }
-      : executeMock(mapped, output);
+      : executeMock(mapped, output, await sourceMockRows(output));
     const hasMore = exec ? result.rows.length > q.limit : result.hasMore;
     return {
       source: exposed,
@@ -464,7 +413,13 @@ export async function runQueryWithContext(
         );
       compile = (q) => compileRelationQuery(q, s, right);
       if (!exec)
-        data = joinRelationRows(mockRows(s), mockRows(right), s, right, join);
+        data = joinRelationRows(
+          await sourceMockRows(s),
+          await sourceMockRows(right),
+          s,
+          right,
+          join,
+        );
     }
     const personalJoin =
       parsed.join && "tableId" in parsed.join ? parsed.join : undefined;
@@ -478,7 +433,8 @@ export async function runQueryWithContext(
       joinVersion = table.version;
       output = joinedSource(s, personalJoin!, table);
       compile = (q) => compileJoinedQuery(q, s, table);
-      if (!exec) data = joinMockRows(mockRows(s), s, personalJoin!, table);
+      if (!exec)
+        data = joinMockRows(await sourceMockRows(s), s, personalJoin!, table);
     }
     validateFieldOverrides(overrides, output.fields);
     output = {
@@ -504,6 +460,7 @@ export async function runQueryWithContext(
         }),
       };
     }
+    if (!exec && !data) data = await sourceMockRows(s);
     const start = performance.now();
     const execute = async (q: Query): Promise<Result> => {
       const compiled = compile(q);
@@ -892,7 +849,7 @@ export async function previewPersonalJoin(
       : executeMock(
           statistics,
           joinedSource(source, q.join, table, true),
-          joinMockRows(mockRows(source), source, q.join, table),
+          joinMockRows(await sourceMockRows(source), source, q.join, table),
         ).rows;
     const totalRows = Number(rows[0]?.[matchField + "__COUNT"] || 0),
       matchedRows = Number(rows[0]?.[matchField + "__SUM"] || 0);
@@ -913,7 +870,12 @@ async function relationCounts(
   exec?: (sql: string, binds?: (string | number | boolean)[]) => Promise<Rows>,
 ): Promise<JoinCounts> {
   const compiled = compileRelationCounts(left, right, join);
-  if (!exec) return mockRelationCounts(mockRows(left), mockRows(right), join);
+  if (!exec)
+    return mockRelationCounts(
+      await sourceMockRows(left),
+      await sourceMockRows(right),
+      join,
+    );
   const rows = await exec(compiled.sql, compiled.binds);
   const result = rows[0];
   const normalized = Object.fromEntries(

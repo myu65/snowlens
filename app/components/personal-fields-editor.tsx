@@ -1,5 +1,6 @@
 "use client";
 import { useState } from "react";
+import { useDraftWarning } from "./ledger-ui";
 import type { Field, FieldOverride } from "@/lib/model";
 
 export default function PersonalFieldsEditor({
@@ -29,6 +30,15 @@ export default function PersonalFieldsEditor({
       .toLowerCase()
       .includes(search.toLowerCase()),
   );
+  const [baseline] = useState(() => JSON.stringify(values));
+  const dirty = JSON.stringify(values) !== baseline;
+  const clearWarning = useDraftWarning(dirty);
+  function close() {
+    if (dirty && !window.confirm("未反映の項目名を破棄して閉じますか？"))
+      return;
+    clearWarning();
+    onClose();
+  }
   return (
     <div className="overlay">
       <section
@@ -37,12 +47,12 @@ export default function PersonalFieldsEditor({
         aria-modal="true"
         aria-label="個人用の項目名を編集"
         onKeyDown={(e) => {
-          if (e.key === "Escape") onClose();
+          if (e.key === "Escape") close();
         }}
       >
         <div className="dialog-title">
           <h2>個人用の項目名と説明</h2>
-          <button aria-label="項目名の編集を閉じる" onClick={onClose}>
+          <button aria-label="項目名の編集を閉じる" onClick={close}>
             ×
           </button>
         </div>
@@ -113,11 +123,12 @@ export default function PersonalFieldsEditor({
           >
             元の名前に戻す
           </button>
-          <button onClick={onClose}>キャンセル</button>
+          <button onClick={close}>キャンセル</button>
           <button
             className="primary"
             disabled={values.some((v) => !v.label.trim())}
             onClick={() => {
+              clearWarning();
               onApply(
                 values.filter((v) => {
                   const original = fields.find((f) => f.id === v.id)!;
