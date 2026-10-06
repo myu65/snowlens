@@ -6,12 +6,14 @@ export default function FactDetail({
   query,
   datasetId,
   onClose,
+  onQueryChange,
 }: {
   query: Query;
   datasetId: string;
   onClose: () => void;
+  onQueryChange?: (query: Query) => void;
 }) {
-  const [offset, setOffset] = useState(0);
+  const [offset, setOffset] = useState(query.offset);
   const [data, setData] = useState<{
     source: QueryableSource;
     result: Result;
@@ -45,6 +47,10 @@ export default function FactDetail({
     return () => controller.abort();
   }, [query, datasetId, offset, retry]);
   const busy = loadedOffset !== offset;
+  function changeOffset(next: number) {
+    setOffset(next);
+    onQueryChange?.({ ...query, offset: next });
+  }
   return (
     <div className="overlay">
       <section
@@ -97,14 +103,14 @@ export default function FactDetail({
         <div className="dialog-footer">
           <button
             disabled={busy || offset === 0}
-            onClick={() => setOffset((n) => Math.max(0, n - query.limit))}
+            onClick={() => changeOffset(Math.max(0, offset - query.limit))}
           >
             前のページ
           </button>
           <span>{Math.floor(offset / query.limit) + 1}</span>
           <button
             disabled={busy || !data?.result.hasMore}
-            onClick={() => setOffset((n) => n + query.limit)}
+            onClick={() => changeOffset(offset + query.limit)}
           >
             次のページ
           </button>

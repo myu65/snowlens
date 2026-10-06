@@ -1,5 +1,6 @@
 "use client";
 import { useState } from "react";
+import { useDraftWarning } from "./ledger-ui";
 import { type PersonalTable } from "@/lib/model";
 import {
   parsePastedTable,
@@ -33,6 +34,14 @@ export default function PersonalTableEditor({
   const [error, setError] = useState("");
   const [busy, setBusy] = useState(false);
   const [page, setPage] = useState(0);
+  const [baseline] = useState(() => JSON.stringify([name, columns, rows]));
+  const dirty = JSON.stringify([name, columns, rows]) !== baseline || !!paste;
+  const clearWarning = useDraftWarning(dirty);
+  function close() {
+    if (dirty && !window.confirm("未保存の変更を破棄して閉じますか？")) return;
+    clearWarning();
+    onClose();
+  }
   function importPaste(text: string) {
     try {
       const data = parsePastedTable(text);
@@ -68,6 +77,7 @@ export default function PersonalTableEditor({
         version: existing?.version || 1,
       });
       await onSave(table);
+      clearWarning();
       onClose();
     } catch (e) {
       setError((e as Error).message);
@@ -83,7 +93,7 @@ export default function PersonalTableEditor({
         aria-modal="true"
         aria-label="個人テーブルを編集"
         onKeyDown={(e) => {
-          if (e.key === "Escape" && !busy) onClose();
+          if (e.key === "Escape" && !busy) close();
         }}
       >
         <div className="dialog-title">
@@ -94,7 +104,7 @@ export default function PersonalTableEditor({
           <button
             aria-label="個人テーブルを閉じる"
             disabled={busy}
-            onClick={onClose}
+            onClick={close}
           >
             ×
           </button>
@@ -304,7 +314,7 @@ export default function PersonalTableEditor({
           )}
         </div>
         <div className="dialog-footer">
-          <button disabled={busy} onClick={onClose}>
+          <button disabled={busy} onClick={close}>
             キャンセル
           </button>
           <button

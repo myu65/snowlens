@@ -1,5 +1,6 @@
 "use client";
 import { useState } from "react";
+import { useDraftWarning } from "./ledger-ui";
 import { type QueryableSource, type Query, type Dataset } from "@/lib/model";
 import FactMappingEditor from "./fact-mapping-editor";
 export default function OwnerEditor({
@@ -46,6 +47,21 @@ export default function OwnerEditor({
       ),
   );
   const [factDetail, setFactDetail] = useState(existing?.factDetail);
+  const [baseline] = useState(() =>
+    JSON.stringify([name, description, fields, drill, factDetail]),
+  );
+  const dirty =
+    JSON.stringify([name, description, fields, drill, factDetail]) !== baseline;
+  const clearWarning = useDraftWarning(dirty);
+  function close() {
+    if (
+      busy ||
+      (dirty && !window.confirm("未公開の変更を破棄して閉じますか？"))
+    )
+      return;
+    clearWarning();
+    onClose();
+  }
   async function publish() {
     setBusy(true);
     setError("");
@@ -60,6 +76,7 @@ export default function OwnerEditor({
         drill,
         ...(factDetail ? { factDetail } : {}),
       });
+      clearWarning();
       onClose();
     } catch (e) {
       setError(e instanceof Error ? e.message : "公開できません");
@@ -80,7 +97,7 @@ export default function OwnerEditor({
             <span className="eyebrow">DATASET OWNER</span>
             <h2>使いやすい定義として公開</h2>
           </div>
-          <button onClick={onClose} aria-label="閉じる">
+          <button onClick={close} aria-label="閉じる" disabled={busy}>
             ×
           </button>
         </div>
@@ -259,7 +276,9 @@ export default function OwnerEditor({
           </p>
         )}
         <div className="dialog-footer">
-          <button onClick={onClose}>キャンセル</button>
+          <button onClick={close} disabled={busy}>
+            キャンセル
+          </button>
           <button
             className="primary"
             disabled={busy || !name.trim() || !fields.length}

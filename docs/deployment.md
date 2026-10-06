@@ -21,6 +21,11 @@ policies, which require an eligible Snowflake edition. No Docker build is needed
    storage SQL scripts. Runtime provides `SNOWFLAKE_ACCOUNT`, `SNOWFLAKE_HOST`
    and token mount. The manifest excludes local auth states, screenshots and mock
    files from the deployment bundle; keep real credentials outside the project.
+   For shared input ledgers, review [department ledger setup](ledgers.md) and
+   `sql/ledger-setup.sql`. Set the deployment-only `SNOWLENS_LEDGER_SPACES` JSON.
+   Hybrid Tables are the default; select `storage: "standard"` explicitly for
+   unsupported accounts. Grant creation and caller privileges only on approved
+   input schemas. This setting affects new ledgers and does not migrate tables.
 4. From this project, run `snow app deploy` using the chosen service-owner role.
 5. Find the URL with `SHOW APPLICATION SERVICES` or `DESCRIBE APPLICATION SERVICE
 SNOWFLAKE_APPS.APP.SNOWLENS`. Grant service access using the current App Runtime

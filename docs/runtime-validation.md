@@ -28,6 +28,18 @@ from App Runtime validation, which remains blocked by the test account's trial s
 
 ## Automated API checks
 
+If department ledgers are enabled, also validate both storage modes on eligible
+accounts using the [ledger deployment template](ledgers.md). The trial account
+cannot establish Hybrid Table behavior. Use shared department reader/writer roles,
+not individual user roles. Verify A can create/input/edit the common layout, B can
+read but cannot mutate, and a different department cannot open the same route or
+source ID. Transfer created table ownership to the schema administrator before
+checking ordinary UPDATE revocation. Repeat with a withdrawn caller grant while
+ordinary user privileges remain. Check concurrent row/layout edits, UUID replay,
+fresh-session reads, typed zero/NULL/false, literal searches, record/layout URL
+reloads and policy results. Confirm procedure storage owners gained no input-data
+SELECT or publication privilege. These checks remain required before closing #5.
+
 Create a local, gitignored `playwright-auth/runtime-config.json` with:
 
 ```json

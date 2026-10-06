@@ -1,5 +1,6 @@
 "use client";
 import { useEffect, useRef, useState } from "react";
+import { useDraftWarning } from "./ledger-ui";
 import {
   maxJoinKeys,
   type Filter,
@@ -93,6 +94,14 @@ export default function TableJoinBuilder({
     ...(rightFilters.length ? { rightFilters } : {}),
   };
   const signature = JSON.stringify(join);
+  const [baseline] = useState(signature);
+  const dirty = signature !== baseline;
+  const clearWarning = useDraftWarning(dirty);
+  function close() {
+    if (dirty && !window.confirm("未反映の結合を破棄して閉じますか？")) return;
+    clearWarning();
+    onClose();
+  }
   function invalidate() {
     abort.current?.abort();
     setBusy(false);
@@ -175,12 +184,12 @@ export default function TableJoinBuilder({
         aria-modal="true"
         aria-label="テーブル同士を結合"
         onKeyDown={(e) => {
-          if (e.key === "Escape") onClose();
+          if (e.key === "Escape") close();
         }}
       >
         <div className="dialog-title">
           <h2>テーブル同士を結合</h2>
-          <button aria-label="テーブル結合を閉じる" onClick={onClose}>
+          <button aria-label="テーブル結合を閉じる" onClick={close}>
             ×
           </button>
         </div>
@@ -443,13 +452,14 @@ export default function TableJoinBuilder({
           )}
         </div>
         <div className="dialog-footer">
-          <button onClick={onClose}>キャンセル</button>
+          <button onClick={close}>キャンセル</button>
           <button
             className="primary"
             disabled={
               !right || busy || loading || !checked || checked.duplicateKeys > 0
             }
             onClick={() => {
+              clearWarning();
               onApply(
                 queryForRelationJoin(query, source, right!, join),
                 right!,

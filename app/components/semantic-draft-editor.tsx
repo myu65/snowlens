@@ -1,5 +1,6 @@
 "use client";
 import { useState } from "react";
+import { useDraftWarning } from "./ledger-ui";
 import type { Query, QueryableSource } from "@/lib/model";
 export default function SemanticDraftEditor({
   source,
@@ -26,6 +27,14 @@ export default function SemanticDraftEditor({
     target: string[];
     requires: string[];
   }>();
+  const [baseline] = useState(() => JSON.stringify([target, method]));
+  const dirty = JSON.stringify([target, method]) !== baseline;
+  const clearWarning = useDraftWarning(dirty);
+  function close() {
+    if (dirty && !window.confirm("公開先の変更を破棄して閉じますか？")) return;
+    clearWarning();
+    onClose();
+  }
   const hasInputFilters =
     query.join &&
     "rightSource" in query.join &&
@@ -69,7 +78,7 @@ export default function SemanticDraftEditor({
       >
         <div className="dialog-title">
           <h2>セマンティックビューの下書き</h2>
-          <button aria-label="公開下書きを閉じる" onClick={onClose}>
+          <button aria-label="公開下書きを閉じる" onClick={close}>
             ×
           </button>
         </div>
@@ -157,7 +166,7 @@ export default function SemanticDraftEditor({
           )}
         </div>
         <div className="dialog-footer">
-          <button onClick={onClose}>閉じる</button>
+          <button onClick={close}>閉じる</button>
           <button className="primary" disabled={!draft} onClick={download}>
             公開SQLを保存
           </button>

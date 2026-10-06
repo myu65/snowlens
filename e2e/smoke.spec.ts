@@ -481,19 +481,10 @@ test("lazy catalog browses database/schema and opens unloaded Datasets", async (
   await page
     .getByRole("button", { name: "データベースを表示", exact: true })
     .click();
-  await page.locator("summary").filter({ hasText: "CHEM" }).click();
-  await page
-    .getByRole("button", { name: "スキーマを表示", exact: true })
-    .click();
-  await page
-    .locator("summary")
-    .filter({ hasText: /^SALES$/ })
-    .click();
-  await page
-    .locator("summary:visible")
-    .filter({ hasText: /^TABLE$/ })
-    .click();
-  await page.getByRole("button", { name: "データを表示", exact: true }).click();
+  await page.getByRole("button", { name: /^CHEM/ }).click();
+  await page.getByRole("button", { name: /^SALES/ }).click();
+  await page.getByRole("button", { name: "TABLE", exact: true }).click();
+  await expect(page).toHaveURL(/catalog=/);
   await page.getByRole("button", { name: /ORDERS.*受注明細/ }).click();
   await ready(page);
   await page.getByRole("button", { name: /SnowLens/ }).click();
@@ -1098,7 +1089,12 @@ test("Access-style composite keys and node conditions recheck counts, save recip
   await expect(
     dialog.getByRole("button", { name: "この結合で見る" }),
   ).toBeDisabled();
+  page.once("dialog", async (confirmation) => {
+    expect(confirmation.message()).toContain("未反映の結合");
+    await confirmation.accept();
+  });
   await dialog.getByRole("button", { name: "キャンセル", exact: true }).click();
+  await expect(dialog).toHaveCount(0);
   const state = await (await request.get("/api/state")).json();
   const saved = state.saved.find(
     (s: { name: string }) => s.name === "複合キーと年度 E2E",

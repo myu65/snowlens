@@ -111,7 +111,7 @@ export default function JoinDiagram({
               target.addEventListener("pointercancel", finish);
             }}
           >
-            <strong>{source.name}</strong>
+            <strong>{source.label || source.name}</strong>
             <small>
               {source.database}.{source.schema}
               {rows[i] !== undefined ? ` · ${rows[i]!.toLocaleString()}行` : ""}

@@ -31,6 +31,13 @@ are needed. Mock saved metadata persists in `.snowlens-mock.json` (gitignored).
   Semantic metrics keep their definitions; required-dimension metrics do not invent totals.
 - Create private typed tables from spreadsheet paste or manual input (1,000 rows,
   12 columns), then LEFT/INNER join them to caller-accessible sources.
+- Use [department ledgers](docs/ledgers.md) for shared input: click rows to open
+  typed forms, edit the common layout with input rights, and use actual Snowflake
+  RBAC for read-only versus input access. Hybrid Tables are the default; deployers
+  can select standard tables per department without automatic downgrades.
+- [Open screens by URL](docs/urls.md), including exploration, current query,
+  private definitions, dialogs, ledger rows and layouts. Reload/back/forward
+  recheck current access and protect unsaved input.
 - Join Table/View/Dynamic Table nodes across schemas. Check exact caller-visible
   row growth, unmatched keys and duplicates before applying a lookup join with
   1–12 key pairs and optional per-node pre-join filters. Existing single-key views work.
