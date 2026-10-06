@@ -1,5 +1,5 @@
 import { afterEach, beforeEach, expect, it, vi } from "vitest";
-import { unlink } from "node:fs/promises";
+import { mkdir, unlink } from "node:fs/promises";
 import {
   ledgerFieldSchema,
   ledgerSource,
@@ -53,6 +53,7 @@ const layout: LedgerLayout = validateLedgerLayout({
 const definition: LedgerDefinition = { id, version: 1, layout },
   space = demoLedgerSpaces[0];
 beforeEach(async () => {
+  await mkdir("artifacts", { recursive: true });
   vi.stubEnv("SNOWLENS_MODE", "mock");
   vi.stubEnv("SNOWLENS_MOCK_FILE", "artifacts/ledger-unit.json");
   await unlink(ledgerMockFile()).catch(() => {});
